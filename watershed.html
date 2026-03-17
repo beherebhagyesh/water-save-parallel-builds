@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Watershed Intelligence</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    margin: 0;
+    background: #000;
+    overflow: hidden;
+    font-family: 'Inter', system-ui, sans-serif;
+    color: #a8d8ff;
+  }
+
+  #canvas-container {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+  }
+
+  canvas { display: block; }
+
+  #ui {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  /* TOP LEFT */
+  #title-block {
+    position: absolute;
+    top: 24px; left: 24px;
+  }
+
+  #title-block h1 {
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: 8px;
+    color: #a8d8ff;
+    text-shadow: 0 0 20px rgba(80,160,255,0.8), 0 0 40px rgba(80,160,255,0.4);
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  #title-block .subtitle {
+    font-size: 11px;
+    font-weight: 300;
+    color: rgba(168,216,255,0.5);
+    letter-spacing: 1px;
+  }
+
+  /* TOP RIGHT */
+  #stats-grid {
+    position: absolute;
+    top: 24px; right: 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .stat-card {
+    background: rgba(0,10,30,0.75);
+    border: 1px solid rgba(80,160,255,0.2);
+    border-radius: 8px;
+    padding: 12px 16px;
+    min-width: 120px;
+    backdrop-filter: blur(8px);
+  }
+
+  .stat-label {
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 1.5px;
+    color: rgba(168,216,255,0.5);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .stat-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: #a8d8ff;
+    text-shadow: 0 0 10px rgba(80,160,255,0.5);
+    line-height: 1;
+  }
+
+  .stat-unit {
+    font-size: 10px;
+    font-weight: 300;
+    color: rgba(168,216,255,0.6);
+    margin-left: 2px;
+  }
+
+  /* LEFT CENTER */
+  #legend {
+    position: absolute;
+    top: 50%;
+    left: 24px;
+    transform: translateY(-50%);
+    background: rgba(0,10,30,0.7);
+    border: 1px solid rgba(80,160,255,0.15);
+    border-radius: 8px;
+    padding: 14px 16px;
+    backdrop-filter: blur(8px);
+  }
+
+  .legend-title {
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 1.5px;
+    color: rgba(168,216,255,0.45);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(168,216,255,0.75);
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* BOTTOM LEFT */
+  #progress-bars {
+    position: absolute;
+    bottom: 80px;
+    left: 24px;
+    background: rgba(0,10,30,0.7);
+    border: 1px solid rgba(80,160,255,0.15);
+    border-radius: 8px;
+    padding: 14px 16px;
+    width: 200px;
+    backdrop-filter: blur(8px);
+  }
+
+  .bar-label {
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 1px;
+    color: rgba(168,216,255,0.5);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .bar-label span:last-child { color: rgba(168,216,255,0.8); }
+
+  .bar-track {
+    height: 4px;
+    background: rgba(80,160,255,0.1);
+    border-radius: 2px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #1565c0, #42ceff);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 6px rgba(66,206,255,0.6);
+  }
+
+  /* BOTTOM CENTER - CONTROLS */
+  #controls {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0,10,30,0.8);
+    border: 1px solid rgba(80,160,255,0.2);
+    border-radius: 12px;
+    padding: 10px 18px;
+    backdrop-filter: blur(12px);
+    pointer-events: all;
+    white-space: nowrap;
+  }
+
+  .btn {
+    background: rgba(0,10,30,0.8);
+    border: 1px solid rgba(80,160,255,0.3);
+    color: #a8d8ff;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    letter-spacing: 0.3px;
+    outline: none;
+  }
+
+  .btn:hover {
+    box-shadow: 0 0 15px rgba(80,160,255,0.3);
+    border-color: rgba(80,160,255,0.6);
+    background: rgba(20,40,80,0.8);
+  }
+
+  .btn.active {
+    background: rgba(20,60,120,0.9);
+    border-color: rgba(80,160,255,0.7);
+    box-shadow: 0 0 12px rgba(80,160,255,0.4);
+  }
+
+  .divider {
+    width: 1px;
+    height: 28px;
+    background: rgba(80,160,255,0.15);
+  }
+
+  .slider-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .slider-label {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 1px;
+    color: rgba(168,216,255,0.6);
+    text-transform: uppercase;
+  }
+
+  #intensity-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100px;
+    height: 4px;
+    background: rgba(80,160,255,0.2);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+
+  #intensity-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #42ceff;
+    box-shadow: 0 0 8px rgba(66,206,255,0.7);
+    cursor: pointer;
+    transition: box-shadow 0.2s;
+  }
+
+  #intensity-slider::-webkit-slider-thumb:hover {
+    box-shadow: 0 0 14px rgba(66,206,255,1.0);
+  }
+
+  #intensity-val {
+    font-size: 12px;
+    font-weight: 600;
+    color: #42ceff;
+    min-width: 24px;
+  }
+
+  /* BOTTOM RIGHT */
+  #watermark {
+    position: absolute;
+    bottom: 24px;
+    right: 24px;
+    font-size: 10px;
+    font-weight: 300;
+    color: rgba(168,216,255,0.25);
+    letter-spacing: 0.5px;
+    text-align: right;
+  }
+</style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+
+<div id="ui">
+  <!-- TOP LEFT -->
+  <div id="title-block">
+    <h1>WATERSHED</h1>
+    <div class="subtitle">Real-time Hydrology Simulation &nbsp;·&nbsp; authored by Claude</div>
+  </div>
+
+  <!-- TOP RIGHT -->
+  <div id="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Active Flows</div>
+      <div class="stat-value" id="stat-flows">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Water Harvested</div>
+      <div class="stat-value" id="stat-harvested">0<span class="stat-unit">m³</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Pond Count</div>
+      <div class="stat-value" id="stat-ponds">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Runoff %</div>
+      <div class="stat-value" id="stat-runoff">100<span class="stat-unit">%</span></div>
+    </div>
+  </div>
+
+  <!-- LEFT CENTER -->
+  <div id="legend">
+    <div class="legend-title">Legend</div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:rgba(28,115,230,0.9); box-shadow:0 0 6px rgba(28,115,230,0.8)"></div>
+      Flow Path
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:rgba(21,101,192,0.9); box-shadow:0 0 6px rgba(21,101,192,0.8)"></div>
+      Pond Site
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:rgba(251,191,36,0.9); box-shadow:0 0 6px rgba(251,191,36,0.8)"></div>
+      Parcel Boundary
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:rgba(168,216,255,0.5); box-shadow:0 0 6px rgba(168,216,255,0.4)"></div>
+      Rain Particle
+    </div>
+  </div>
+
+  <!-- BOTTOM LEFT -->
+  <div id="progress-bars">
+    <div class="bar-label"><span>Flow Accumulation</span><span id="pct-flow">0%</span></div>
+    <div class="bar-track"><div class="bar-fill" id="bar-flow" style="width:0%"></div></div>
+
+    <div class="bar-label"><span>Soil Saturation</span><span id="pct-soil">0%</span></div>
+    <div class="bar-track"><div class="bar-fill" id="bar-soil" style="width:0%"></div></div>
+
+    <div class="bar-label" style="margin-bottom:4px"><span>Pond Capacity</span><span id="pct-pond">0%</span></div>
+    <div class="bar-track" style="margin-bottom:0"><div class="bar-fill" id="bar-pond" style="width:0%"></div></div>
+  </div>
+
+  <!-- BOTTOM CENTER CONTROLS -->
+  <div id="controls">
+    <button class="btn" id="btn-pause">⏸ Pause</button>
+    <div class="divider"></div>
+    <button class="btn" id="btn-rain">🌧 Rain Event</button>
+    <div class="divider"></div>
+    <div class="slider-group">
+      <span class="slider-label">Intensity</span>
+      <input type="range" id="intensity-slider" min="1" max="100" value="40">
+      <span id="intensity-val">40</span>
+    </div>
+    <div class="divider"></div>
+    <button class="btn" id="btn-reset">↺ Reset</button>
+  </div>
+
+  <!-- BOTTOM RIGHT -->
+  <div id="watermark">
+    Watershed v1.0 · Claude Sonnet 4.6 · 2026
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<script>
+(function() {
+'use strict';
+
+// ─── PERLIN NOISE ────────────────────────────────────────────────────────────
+const perm = new Uint8Array(512);
+(function initPerm() {
+  const p = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) p[i] = i;
+  for (let i = 255; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [p[i], p[j]] = [p[j], p[i]];
+  }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+})();
+
+function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+function lerp(a, b, t) { return a + t * (b - a); }
+
+function grad2(hash, x, y) {
+  const h = hash & 7;
+  const u = h < 4 ? x : y;
+  const v = h < 4 ? y : x;
+  return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+}
+
+function perlin2(x, y) {
+  const xi = Math.floor(x) & 255;
+  const yi = Math.floor(y) & 255;
+  const xf = x - Math.floor(x);
+  const yf = y - Math.floor(y);
+  const u = fade(xf);
+  const v = fade(yf);
+  const aa = perm[perm[xi]     + yi];
+  const ab = perm[perm[xi]     + yi + 1];
+  const ba = perm[perm[xi + 1] + yi];
+  const bb = perm[perm[xi + 1] + yi + 1];
+  return lerp(
+    lerp(grad2(aa, xf,   yf),   grad2(ba, xf-1, yf),   u),
+    lerp(grad2(ab, xf,   yf-1), grad2(bb, xf-1, yf-1), u),
+    v
+  );
+}
+
+function fbm(x, y) {
+  let val = 0, amp = 1, freq = 1, maxAmp = 0;
+  const OCTAVES = 7, PERSISTENCE = 0.5, LACUNARITY = 2.1;
+  for (let i = 0; i < OCTAVES; i++) {
+    val += perlin2(x * freq, y * freq) * amp;
+    maxAmp += amp;
+    amp *= PERSISTENCE;
+    freq *= LACUNARITY;
+  }
+  return val / maxAmp;
+}
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+const TERRAIN_SEGS = 128;
+const N = TERRAIN_SEGS + 1; // 129
+const WORLD = 100;
+const ELEV_SCALE = 22;
+const MAX_PARTICLES = 3000;
+const CELL = WORLD / TERRAIN_SEGS;
+
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let paused = false;
+let rainEvent = false;
+let intensity = 40;
+let frame = 0;
+let totalDrops = 0;
+let totalHarvested = 0;
+
+// ─── HEIGHTMAP ───────────────────────────────────────────────────────────────
+const heightmap = new Float32Array(N * N);
+
+(function buildHeightmap() {
+  let mn = Infinity, mx = -Infinity;
+  const cx = N * 0.5, cy = N * 0.5;
+  const scale = 0.018;
+  for (let row = 0; row < N; row++) {
+    for (let col = 0; col < N; col++) {
+      const nx = col * scale;
+      const ny = row * scale;
+      let h = fbm(nx, ny);
+      // Slight bowl — edges pushed up very slightly, valleys encouraged inside
+      const dx = (col - cx) / (N * 0.5);
+      const dy = (row - cy) / (N * 0.5);
+      const edgeFactor = (dx*dx + dy*dy) * 0.18;
+      h += edgeFactor;
+      heightmap[row * N + col] = h;
+      if (h < mn) mn = h;
+      if (h > mx) mx = h;
+    }
+  }
+  const range = mx - mn;
+  for (let i = 0; i < N * N; i++) {
+    heightmap[i] = ((heightmap[i] - mn) / range) * ELEV_SCALE;
+  }
+})();
+
+// Helper: sample heightmap by world XZ (bilinear)
+function sampleHeight(wx, wz) {
+  const col = (wx + WORLD * 0.5) / CELL;
+  const row = (wz + WORLD * 0.5) / CELL;
+  const c0 = Math.max(0, Math.min(N - 2, Math.floor(col)));
+  const r0 = Math.max(0, Math.min(N - 2, Math.floor(row)));
+  const tc = col - c0, tr = row - r0;
+  const h00 = heightmap[r0 * N + c0];
+  const h10 = heightmap[r0 * N + (c0 + 1)];
+  const h01 = heightmap[(r0 + 1) * N + c0];
+  const h11 = heightmap[(r0 + 1) * N + (c0 + 1)];
+  return h00*(1-tc)*(1-tr) + h10*tc*(1-tr) + h01*(1-tc)*tr + h11*tc*tr;
+}
+
+function heightmapIdx(wx, wz) {
+  const col = Math.round((wx + WORLD * 0.5) / CELL);
+  const row = Math.round((wz + WORLD * 0.5) / CELL);
+  return Math.max(0, Math.min(N-1, row)) * N + Math.max(0, Math.min(N-1, col));
+}
+
+// ─── ACCUMULATION GRID ───────────────────────────────────────────────────────
+const accGrid = new Float32Array(N * N);
+
+// ─── THREE.JS SETUP ──────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050d1a);
+scene.fog = new THREE.FogExp2(0x050d1a, 0.018);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 45, 65);
+camera.lookAt(0, 0, 0);
+
+// ─── LIGHTS ──────────────────────────────────────────────────────────────────
+const ambient = new THREE.AmbientLight(0x1a2a3a, 1.2);
+scene.add(ambient);
+
+const sunLight = new THREE.DirectionalLight(0xfff5e0, 2.2);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width = 2048;
+sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.camera.near = 1;
+sunLight.shadow.camera.far = 300;
+sunLight.shadow.camera.left = -80;
+sunLight.shadow.camera.right = 80;
+sunLight.shadow.camera.top = 80;
+sunLight.shadow.camera.bottom = -80;
+sunLight.shadow.bias = -0.001;
+scene.add(sunLight);
+
+const fillLight = new THREE.DirectionalLight(0x2244aa, 0.6);
+fillLight.position.set(-30, 20, -30);
+scene.add(fillLight);
+
+// ─── TERRAIN ─────────────────────────────────────────────────────────────────
+const terrainGeo = new THREE.PlaneGeometry(WORLD, WORLD, TERRAIN_SEGS, TERRAIN_SEGS);
+terrainGeo.rotateX(-Math.PI / 2);
+
+const positions = terrainGeo.attributes.position.array;
+const colors = new Float32Array(positions.length);
+
+// Apply heightmap + vertex colors
+for (let row = 0; row < N; row++) {
+  for (let col = 0; col < N; col++) {
+    const vIdx = row * N + col;
+    const h = heightmap[vIdx];
+    // position.y
+    positions[vIdx * 3 + 1] = h;
+  }
+}
+
+// Compute hillshading and vertex colors
+function elevColor(h, shade) {
+  const t = h / ELEV_SCALE;
+  let r, g, b;
+  if (t < 0.2) {
+    // Deep green valley
+    r = 0.05 + t * 0.3; g = 0.2 + t * 0.8; b = 0.05 + t * 0.2;
+  } else if (t < 0.45) {
+    const s = (t - 0.2) / 0.25;
+    // Olive mid-slope
+    r = 0.12 + s * 0.25; g = 0.36 - s * 0.06; b = 0.05 - s * 0.03;
+  } else if (t < 0.7) {
+    const s = (t - 0.45) / 0.25;
+    // Red-brown laterite
+    r = 0.37 + s * 0.28; g = 0.30 - s * 0.12; b = 0.02;
+  } else {
+    const s = (t - 0.7) / 0.3;
+    // Gray peaks
+    r = 0.65 + s * 0.25; g = 0.60 + s * 0.25; b = 0.55 + s * 0.25;
+  }
+  // Hillshading
+  r *= shade; g *= shade; b *= shade;
+  return [r, g, b];
+}
+
+for (let row = 0; row < N; row++) {
+  for (let col = 0; col < N; col++) {
+    const vIdx = row * N + col;
+    const h = heightmap[vIdx];
+    // Sample 4 neighbors for gradient
+    const hL = heightmap[row * N + Math.max(0, col - 1)];
+    const hR = heightmap[row * N + Math.min(N - 1, col + 1)];
+    const hD = heightmap[Math.max(0, row - 1) * N + col];
+    const hU = heightmap[Math.min(N - 1, row + 1) * N + col];
+    const gx = (hR - hL) / (2 * CELL);
+    const gy = (hU - hD) / (2 * CELL);
+    // Sun direction for hillshading
+    const nx2 = -gx, ny2 = 1.0, nz2 = -gy;
+    const len = Math.sqrt(nx2*nx2 + ny2*ny2 + nz2*nz2);
+    const snx = nx2/len, sny = ny2/len, snz = nz2/len;
+    const sunDir = new THREE.Vector3(0.5, 0.8, 0.3).normalize();
+    const shade = Math.max(0.25, snx * sunDir.x + sny * sunDir.y + snz * sunDir.z);
+    const [r, g, b] = elevColor(h, shade);
+    colors[vIdx * 3] = r;
+    colors[vIdx * 3 + 1] = g;
+    colors[vIdx * 3 + 2] = b;
+  }
+}
+
+terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+terrainGeo.attributes.position.needsUpdate = true;
+terrainGeo.computeVertexNormals();
+
+const terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+terrain.receiveShadow = true;
+scene.add(terrain);
+
+// ─── FIND LOCAL MINIMA ───────────────────────────────────────────────────────
+function findLocalMinima() {
+  const candidates = [];
+  // Looser search: cell must be lower than all 4 cardinal neighbors by at least 0.1m
+  for (let row = 6; row < N - 6; row += 6) {
+    for (let col = 6; col < N - 6; col += 6) {
+      const h = heightmap[row * N + col];
+      // Only consider cells in lower 40% of elevation range
+      if (h / ELEV_SCALE > 0.4) continue;
+      let isMin = true;
+      const check = [[row-3,col],[row+3,col],[row,col-3],[row,col+3],
+                     [row-3,col-3],[row-3,col+3],[row+3,col-3],[row+3,col+3]];
+      for (const [nr, nc] of check) {
+        if (nr >= 0 && nr < N && nc >= 0 && nc < N) {
+          if (heightmap[nr * N + nc] < h - 0.05) { isMin = false; break; }
+        }
+      }
+      if (isMin) candidates.push({ row, col, h });
+    }
+  }
+  candidates.sort((a, b) => a.h - b.h);
+  const result = candidates.slice(0, 8);
+  // Fallback: if no minima found, use lowest points sampled on a coarse grid
+  if (result.length === 0) {
+    for (let row = 12; row < N - 12; row += 16) {
+      for (let col = 12; col < N - 12; col += 16) {
+        result.push({ row, col, h: heightmap[row * N + col] });
+      }
+    }
+    result.sort((a, b) => a.h - b.h);
+    return result.slice(0, 8);
+  }
+  return result;
+}
+
+const pondMinima = findLocalMinima();
+
+// ─── PONDS ───────────────────────────────────────────────────────────────────
+const ponds = pondMinima.map(({ row, col, h }) => {
+  const wx = (col / (N - 1)) * WORLD - WORLD * 0.5;
+  const wz = (row / (N - 1)) * WORLD - WORLD * 0.5;
+
+  const pondGeo = new THREE.CircleGeometry(0.1, 32);
+  pondGeo.rotateX(-Math.PI / 2);
+  const pondMat = new THREE.MeshBasicMaterial({
+    color: 0x1565c0,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false
+  });
+  const pondMesh = new THREE.Mesh(pondGeo, pondMat);
+  pondMesh.position.set(wx, h + 0.05, wz);
+  scene.add(pondMesh);
+
+  const ringGeo = new THREE.RingGeometry(0.12, 0.3, 32);
+  ringGeo.rotateX(-Math.PI / 2);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x42ceff,
+    transparent: true,
+    opacity: 0.0,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+  const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+  ringMesh.position.set(wx, h + 0.08, wz);
+  scene.add(ringMesh);
+
+  return {
+    wx, wz, h,
+    fill: 0,
+    radius: 0.1,
+    pondMesh, pondMat, pondGeo,
+    ringMesh, ringMat, ringGeo
+  };
+});
+
+function updatePondGeometry(pond) {
+  scene.remove(pond.pondMesh);
+  scene.remove(pond.ringMesh);
+
+  const geo = new THREE.CircleGeometry(pond.radius, 32);
+  geo.rotateX(-Math.PI / 2);
+  pond.pondGeo = geo;
+  pond.pondMesh = new THREE.Mesh(geo, pond.pondMat);
+  pond.pondMesh.position.set(pond.wx, pond.h + 0.05, pond.wz);
+  scene.add(pond.pondMesh);
+
+  const rGeo = new THREE.RingGeometry(pond.radius + 0.1, pond.radius + 0.5, 32);
+  rGeo.rotateX(-Math.PI / 2);
+  pond.ringGeo = rGeo;
+  pond.ringMesh = new THREE.Mesh(rGeo, pond.ringMat);
+  pond.ringMesh.position.set(pond.wx, pond.h + 0.08, pond.wz);
+  scene.add(pond.ringMesh);
+}
+
+// ─── PARCEL BOUNDARY ─────────────────────────────────────────────────────────
+const parcelXZ = [
+  [-18,-22],[5,-26],[24,-20],[28,0],
+  [22,18],[8,25],[-10,22],[-26,10],[-28,-8],[-18,-22]
+];
+
+function buildParcelLine(color, opacity, offsetY) {
+  const pts = parcelXZ.map(([x, z]) => {
+    const y = sampleHeight(x, z) + 0.3 + offsetY;
+    return new THREE.Vector3(x, y, z);
+  });
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+  return new THREE.Line(geo, mat);
+}
+
+scene.add(buildParcelLine(0xfbbf24, 1.0, 0));
+scene.add(buildParcelLine(0xffe082, 0.35, 0.05));
+
+// ─── WATER PARTICLES ─────────────────────────────────────────────────────────
+const particleData = [];
+for (let i = 0; i < MAX_PARTICLES; i++) {
+  particleData.push({
+    active: false,
+    x: 0, z: 0, y: 0,
+    age: 0, maxAge: 120,
+    type: 0 // 0=flow, 1=rain
+  });
+}
+
+const particlePositions = new Float32Array(MAX_PARTICLES * 3);
+const particleSizes = new Float32Array(MAX_PARTICLES);
+const particleColors = new Float32Array(MAX_PARTICLES * 3);
+const particleAlphas = new Float32Array(MAX_PARTICLES);
+
+const particleGeo = new THREE.BufferGeometry();
+particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+particleGeo.setAttribute('size', new THREE.BufferAttribute(particleSizes, 1));
+particleGeo.setAttribute('color', new THREE.BufferAttribute(particleColors, 3));
+particleGeo.setAttribute('alpha', new THREE.BufferAttribute(particleAlphas, 1));
+
+const particleMat = new THREE.ShaderMaterial({
+  vertexShader: `
+    attribute float size;
+    attribute vec3 color;
+    attribute float alpha;
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main() {
+      vColor = color;
+      vAlpha = alpha;
+      vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = size * (300.0 / -mvPos.z);
+      gl_Position = projectionMatrix * mvPos;
+    }
+  `,
+  fragmentShader: `
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main() {
+      vec2 uv = gl_PointCoord - vec2(0.5);
+      float d = length(uv) * 2.0;
+      if (d > 1.0) discard;
+      float core = exp(-d * 4.0);
+      float halo = exp(-d * 1.5) * 0.4;
+      float alpha = (core + halo) * vAlpha;
+      gl_FragColor = vec4(vColor, alpha);
+    }
+  `,
+  transparent: true,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false
+});
+
+const particleSystem = new THREE.Points(particleGeo, particleMat);
+scene.add(particleSystem);
+
+// Spawn helpers
+function randBetween(a, b) { return a + Math.random() * (b - a); }
+
+function spawnParticle(type) {
+  for (let i = 0; i < MAX_PARTICLES; i++) {
+    const p = particleData[i];
+    if (!p.active) {
+      p.active = true;
+      p.age = 0;
+      p.maxAge = Math.floor(randBetween(60, 180));
+      p.type = type;
+
+      if (type === 0) {
+        // Flow: try 5 random positions, pick highest
+        let bestX = 0, bestZ = 0, bestH = -1;
+        for (let t = 0; t < 5; t++) {
+          const tx = randBetween(-48, 48);
+          const tz = randBetween(-48, 48);
+          const th = sampleHeight(tx, tz);
+          if (th > bestH) { bestH = th; bestX = tx; bestZ = tz; }
+        }
+        p.x = bestX; p.z = bestZ;
+      } else {
+        // Rain: random XZ
+        p.x = randBetween(-48, 48);
+        p.z = randBetween(-48, 48);
+      }
+      p.y = sampleHeight(p.x, p.z) + 0.4;
+      totalDrops++;
+      return;
+    }
+  }
+}
+
+// D8 steepest descent gradient at world position
+function getFlowDir(wx, wz) {
+  const d8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
+  const h0 = sampleHeight(wx, wz);
+  let bestDrop = 0, bestDx = 0, bestDz = 0;
+  for (const [dx, dz] of d8) {
+    const step = CELL * 0.5;
+    const h1 = sampleHeight(wx + dx * step, wz + dz * step);
+    const drop = h0 - h1;
+    if (drop > bestDrop) {
+      bestDrop = drop;
+      bestDx = dx; bestDz = dz;
+    }
+  }
+  return [bestDx, bestDz, bestDrop];
+}
+
+// ─── CAMERA ORBIT ─────────────────────────────────────────────────────────────
+let theta = 0.35, phi = Math.PI / 3.8, dist = 95;
+let isMouseDown = false, lastMX = 0, lastMY = 0;
+
+renderer.domElement.addEventListener('mousedown', e => {
+  isMouseDown = true; lastMX = e.clientX; lastMY = e.clientY;
+});
+renderer.domElement.addEventListener('mousemove', e => {
+  if (!isMouseDown) return;
+  const dx = e.clientX - lastMX;
+  const dy = e.clientY - lastMY;
+  theta -= dx * 0.005;
+  phi = Math.max(0.1, Math.min(Math.PI / 2.2, phi - dy * 0.005));
+  lastMX = e.clientX; lastMY = e.clientY;
+});
+renderer.domElement.addEventListener('mouseup', () => { isMouseDown = false; });
+renderer.domElement.addEventListener('mouseleave', () => { isMouseDown = false; });
+renderer.domElement.addEventListener('wheel', e => {
+  dist = Math.max(15, Math.min(140, dist + e.deltaY * 0.05));
+}, { passive: true });
+
+function updateCamera() {
+  camera.position.x = dist * Math.sin(phi) * Math.sin(theta);
+  camera.position.y = dist * Math.cos(phi);
+  camera.position.z = dist * Math.sin(phi) * Math.cos(theta);
+  camera.lookAt(0, 5, 0);
+}
+
+// ─── CONTROLS ────────────────────────────────────────────────────────────────
+document.getElementById('btn-pause').addEventListener('click', function() {
+  paused = !paused;
+  this.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  this.classList.toggle('active', paused);
+});
+
+document.getElementById('btn-rain').addEventListener('click', function() {
+  rainEvent = !rainEvent;
+  this.classList.toggle('active', rainEvent);
+});
+
+const slider = document.getElementById('intensity-slider');
+const intensityVal = document.getElementById('intensity-val');
+slider.addEventListener('input', function() {
+  intensity = parseInt(this.value);
+  intensityVal.textContent = intensity;
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  for (const p of particleData) p.active = false;
+  for (const pond of ponds) {
+    pond.fill = 0;
+    pond.radius = 0.1;
+    updatePondGeometry(pond);
+  }
+  accGrid.fill(0);
+  totalDrops = 0;
+  totalHarvested = 0;
+});
+
+// ─── UI UPDATE ────────────────────────────────────────────────────────────────
+function updateUI() {
+  let activeFlows = 0;
+  for (const p of particleData) { if (p.active) activeFlows++; }
+
+  const activePonds = ponds.filter(p => p.fill > 0.05).length;
+  const runoff = totalDrops > 0
+    ? Math.round((1 - totalHarvested / totalDrops) * 100)
+    : 100;
+
+  document.getElementById('stat-flows').textContent = activeFlows;
+  document.getElementById('stat-harvested').innerHTML = totalHarvested.toFixed(1) + '<span class="stat-unit">m³</span>';
+  document.getElementById('stat-ponds').textContent = activePonds;
+  document.getElementById('stat-runoff').innerHTML = Math.max(0, runoff) + '<span class="stat-unit">%</span>';
+
+  // Progress bars
+  let accSum = 0;
+  for (let i = 0; i < accGrid.length; i++) accSum += accGrid[i];
+  const accMax = accGrid.length * 2;
+  const flowPct = Math.min(100, Math.round(accSum / accMax * 100));
+
+  const soilPct = Math.min(100, Math.round((totalHarvested / Math.max(1, totalDrops * 0.5)) * 100));
+
+  let pondFillSum = 0;
+  for (const p of ponds) pondFillSum += p.fill;
+  const pondPct = ponds.length > 0 ? Math.round((pondFillSum / ponds.length) * 100) : 0;
+
+  const bf = n => document.getElementById(n);
+  bf('bar-flow').style.width = flowPct + '%';
+  bf('pct-flow').textContent = flowPct + '%';
+  bf('bar-soil').style.width = soilPct + '%';
+  bf('pct-soil').textContent = soilPct + '%';
+  bf('bar-pond').style.width = pondPct + '%';
+  bf('pct-pond').textContent = pondPct + '%';
+}
+
+// ─── INITIAL BURST ────────────────────────────────────────────────────────────
+for (let i = 0; i < 300; i++) spawnParticle(0);
+
+// ─── ANIMATION LOOP ───────────────────────────────────────────────────────────
+const SUN_PERIOD = 5 * 60; // seconds
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const elapsed = clock.getElapsedTime();
+
+  if (!paused) {
+    frame++;
+
+    // Sun orbit
+    const sunAngle = (elapsed / SUN_PERIOD) * Math.PI * 2;
+    const sunR = 80;
+    sunLight.position.set(
+      sunR * Math.sin(sunAngle),
+      50 + Math.sin(sunAngle * 0.5) * 20,
+      sunR * Math.cos(sunAngle)
+    );
+
+    // Spawn particles
+    const spawnCount = Math.min(Math.floor(intensity * 0.8), Math.floor(MAX_PARTICLES * 0.8));
+    let activeCount = 0;
+    for (const p of particleData) { if (p.active) activeCount++; }
+    const toSpawn = Math.min(spawnCount, MAX_PARTICLES - activeCount);
+    for (let i = 0; i < toSpawn; i++) {
+      const isRain = rainEvent ? (Math.random() < 0.6) : (Math.random() < 0.15);
+      spawnParticle(isRain ? 1 : 0);
+    }
+
+    // Update particles
+    for (let i = 0; i < MAX_PARTICLES; i++) {
+      const p = particleData[i];
+      if (!p.active) {
+        particlePositions[i*3] = 0;
+        particlePositions[i*3+1] = -100; // hide below terrain
+        particlePositions[i*3+2] = 0;
+        particleSizes[i] = 0;
+        particleAlphas[i] = 0;
+        continue;
+      }
+
+      p.age++;
+      if (p.age >= p.maxAge) { p.active = false; continue; }
+
+      // Flow direction
+      const [fdx, fdz, drop] = getFlowDir(p.x, p.z);
+      const jitter = 0.08;
+      p.x += fdx * 0.3 + (Math.random() - 0.5) * jitter;
+      p.z += fdz * 0.3 + (Math.random() - 0.5) * jitter;
+
+      // Clamp to terrain bounds
+      p.x = Math.max(-49, Math.min(49, p.x));
+      p.z = Math.max(-49, Math.min(49, p.z));
+      p.y = sampleHeight(p.x, p.z) + 0.3;
+
+      // Update accumulation grid
+      const aIdx = heightmapIdx(p.x, p.z);
+      accGrid[aIdx] += 0.5;
+
+      // Check pond proximity
+      let absorbed = false;
+      for (const pond of ponds) {
+        const dx = p.x - pond.wx;
+        const dz = p.z - pond.wz;
+        const dist2 = Math.sqrt(dx*dx + dz*dz);
+        if (dist2 < 4.0) {
+          p.active = false;
+          pond.fill = Math.min(1, pond.fill + 0.002);
+          totalHarvested += 0.1;
+          absorbed = true;
+          break;
+        }
+      }
+      if (absorbed) continue;
+
+      // Life fraction
+      const life = 1 - p.age / p.maxAge;
+      const sz = 1.5 + life * 2.5;
+      particleSizes[i] = sz;
+
+      // Color
+      const isNearMin = drop < 0.001;
+      if (p.type === 1) {
+        // Rain
+        particleColors[i*3]   = 0.4;
+        particleColors[i*3+1] = 0.7;
+        particleColors[i*3+2] = 1.0;
+      } else if (isNearMin) {
+        // Near local minimum — glow cyan
+        particleColors[i*3]   = 0.2;
+        particleColors[i*3+1] = 0.9;
+        particleColors[i*3+2] = 1.0;
+      } else {
+        // Flow
+        particleColors[i*3]   = 0.1;
+        particleColors[i*3+1] = 0.45;
+        particleColors[i*3+2] = 0.9;
+      }
+      particleAlphas[i] = Math.min(1.0, life * 2.0);
+
+      particlePositions[i*3]   = p.x;
+      particlePositions[i*3+1] = p.y;
+      particlePositions[i*3+2] = p.z;
+    }
+
+    particleGeo.attributes.position.needsUpdate = true;
+    particleGeo.attributes.size.needsUpdate = true;
+    particleGeo.attributes.color.needsUpdate = true;
+    particleGeo.attributes.alpha.needsUpdate = true;
+
+    // Update ponds
+    const t = elapsed;
+    for (const pond of ponds) {
+      // Radius grows with fill
+      const targetRadius = 0.1 + pond.fill * 8.0;
+      if (Math.abs(pond.radius - targetRadius) > 0.05) {
+        pond.radius = pond.radius + (targetRadius - pond.radius) * 0.05;
+        updatePondGeometry(pond);
+      }
+
+      // Color shift: 0x1565c0 → 0x42ceff
+      const f = pond.fill;
+      const r = Math.round(0x15 + f * (0x42 - 0x15));
+      const g = Math.round(0x65 + f * (0xce - 0x65));
+      const b = Math.round(0xc0 + f * (0xff - 0xc0));
+      pond.pondMat.color.setRGB(r/255, g/255, b/255);
+
+      // Y oscillation
+      pond.pondMesh.position.y = pond.h + 0.05 + Math.sin(t * 1.5) * 0.05;
+      pond.ringMesh.position.y = pond.h + 0.08 + Math.sin(t * 1.5) * 0.05;
+
+      // Ring animated opacity
+      pond.ringMat.opacity = 0.3 + 0.3 * Math.sin(t * 2.0 + pond.wx);
+    }
+
+    // UI every 10 frames
+    if (frame % 10 === 0) updateUI();
+  }
+
+  updateCamera();
+  renderer.render(scene, camera);
+}
+
+// ─── RESIZE ───────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+
+})();
+</script>
+
+<footer style="display:none">Watershed Intelligence — authored by Claude Sonnet 4.6 · 2026</footer>
+</body>
+</html>
