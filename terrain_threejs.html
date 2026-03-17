@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Terrain v6 — DEM-derived hydrology</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#08101a; overflow:hidden; font-family:'Courier New',monospace; }
+#ui {
+  position:absolute; top:16px; left:16px;
+  background:rgba(6,10,15,0.92); border:1px solid #1a3040;
+  padding:14px 18px; color:#c9d1d9; font-size:11px; border-radius:4px; min-width:210px;
+  z-index:10;
+}
+#ui h3 { color:#39d0f0; margin-bottom:10px; letter-spacing:2px; font-size:11px; }
+.row { display:flex; justify-content:space-between; align-items:center; margin:5px 0; gap:8px; }
+.row label { color:#8b949e; }
+.row span  { color:#39d0f0; min-width:32px; text-align:right; }
+input[type=range] { width:110px; accent-color:#39d0f0; }
+hr { border-color:#1a3040; margin:8px 0; }
+.tog { display:flex; align-items:center; gap:6px; margin:4px 0; cursor:pointer; }
+.tog input { accent-color:#39d0f0; }
+#status {
+  position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+  color:#39d0f0; font-size:10px; letter-spacing:1px;
+  background:rgba(6,10,15,0.85); padding:4px 14px; border-radius:3px;
+  border:1px solid #1a3040; white-space:nowrap; z-index:10;
+}
+.pond-label {
+  background:rgba(6,10,15,0.92); border:1px solid #39d0f0; border-radius:4px;
+  padding:5px 10px; color:#e6edf3; font-family:'Courier New',monospace;
+  font-size:11px; line-height:1.6; pointer-events:none; white-space:nowrap;
+}
+.hi { color:#00ccff; font-weight:bold; }
+.md { color:#0099cc; font-weight:bold; }
+#labels { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; overflow:hidden; z-index:5; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <h3>▦ TERRAIN VIEWER</h3>
+  <div class="row"><label>Elev ×</label><input type="range" id="elev" min="1" max="12" step="0.5" value="8"><span id="elevv">8</span></div>
+  <div class="row"><label>Sun angle</label><input type="range" id="sun" min="0" max="360" step="5" value="220"><span id="sunv">220°</span></div>
+  <div class="row"><label>Brightness</label><input type="range" id="bright" min="0.5" max="2.5" step="0.1" value="1.4"><span id="brightv">1.4</span></div>
+  <div class="row"><label>Stream detail</label>
+    <select id="thresh" style="background:#0d1a24;color:#39d0f0;border:1px solid #1a3040;padding:2px 6px;font-family:inherit;font-size:11px;">
+      <option value="fine">Fine (all channels)</option>
+      <option value="medium" selected>Medium (main + trib)</option>
+      <option value="coarse">Coarse (main only)</option>
+    </select>
+  </div>
+  <div class="row"><label>Rain intensity</label><input type="range" id="rain" min="0" max="100" step="5" value="40"><span id="rainv">40%</span></div>
+  <div class="row"><label>Surface</label>
+    <select id="surfMode" style="background:#0d1a24;color:#39d0f0;border:1px solid #1a3040;padding:2px 6px;font-family:inherit;font-size:11px;">
+      <option value="satellite" selected>Satellite</option>
+      <option value="elevation">Elevation</option>
+      <option value="flow">Water accumulation</option>
+    </select>
+  </div>
+  <hr>
+  <div class="tog"><input type="checkbox" id="tFlow" checked><label>Flow network</label></div>
+  <div class="tog"><input type="checkbox" id="tPonds" checked><label>Pond sites</label></div>
+  <div class="tog"><input type="checkbox" id="tBoundary" checked><label>Watershed</label></div>
+  <div class="tog"><input type="checkbox" id="tSides" checked><label>Geological sides</label></div>
+</div>
+<div id="labels"></div>
+<div id="status">Initialising…</div>
+
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.165.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls }   from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+// ─── Config ─────────────────────────────────────────────────────────────────
+const GRID = 128;
+const Z    = 12;
+const BBOX = { w:74.18, s:21.33, e:74.30, n:21.42 };
+const CX   = (BBOX.w+BBOX.e)/2, CY=(BBOX.s+BBOX.n)/2;
+const WW   = 100, WH = WW*(BBOX.n-BBOX.s)/(BBOX.e-BBOX.w);
+let ES = 8, STREAM_DETAIL = 'medium';
+let STREAM_THRESH = 60; // auto-computed from DEM percentile
+
+// ─── Renderer ────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type    = THREE.PCFSoftShadowMap;
+renderer.toneMapping       = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer({element:document.getElementById('labels')});
+labelRenderer.setSize(innerWidth,innerHeight);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x08101a);
+scene.fog = new THREE.FogExp2(0x08101a, 0.0035);
+
+const cam = new THREE.PerspectiveCamera(42,innerWidth/innerHeight,0.1,800);
+cam.position.set(-75,90,75); cam.lookAt(0,5,0);
+
+const ctrl = new OrbitControls(cam,renderer.domElement);
+ctrl.enableDamping=true; ctrl.dampingFactor=0.08;
+ctrl.target.set(0,5,0); ctrl.minDistance=30; ctrl.maxDistance=300;
+ctrl.maxPolarAngle=Math.PI/2.05;
+
+// ─── Lights ──────────────────────────────────────────────────────────────────
+const sun = new THREE.DirectionalLight(0xfff8e8,2.2);
+sun.position.set(60,90,40); sun.castShadow=true;
+sun.shadow.mapSize.set(4096,4096);
+sun.shadow.camera.near=1; sun.shadow.camera.far=300;
+sun.shadow.camera.left=-80; sun.shadow.camera.right=80;
+sun.shadow.camera.top=80; sun.shadow.camera.bottom=-80;
+sun.shadow.bias=-0.001;
+scene.add(sun);
+const amb = new THREE.AmbientLight(0x9ab8d8,0.95); scene.add(amb);
+const fill2=new THREE.DirectionalLight(0x6080c0,0.5); fill2.position.set(-40,30,-20); scene.add(fill2);
+window._sun=sun; window._amb=amb;
+
+// ─── Terrain mesh ────────────────────────────────────────────────────────────
+const geo   = new THREE.PlaneGeometry(WW,WH,GRID-1,GRID-1);
+geo.rotateX(-Math.PI/2);
+const tmat  = new THREE.MeshStandardMaterial({roughness:0.82,metalness:0.0});
+const tmesh = new THREE.Mesh(geo,tmat);
+tmesh.receiveShadow=true; scene.add(tmesh);
+
+let elevData = new Float32Array(GRID*GRID).fill(200);
+let SURF_MODE = 'satellite';
+
+// Hypsometric colour ramp: valleys (green) → slopes (yellow) → ridges (brown)
+const ELEV_RAMP=[
+  {t:0.00,r:0.18,g:0.42,b:0.24}, // deep valley — forest green
+  {t:0.18,r:0.35,g:0.62,b:0.28}, // valley floor — light green
+  {t:0.38,r:0.76,g:0.72,b:0.28}, // lower slope — straw yellow
+  {t:0.58,r:0.75,g:0.45,b:0.18}, // mid slope — warm orange
+  {t:0.78,r:0.55,g:0.32,b:0.16}, // upper slope — brown
+  {t:1.00,r:0.38,g:0.26,b:0.20}, // ridge — dark brown
+];
+function rampColor(t){
+  t=Math.max(0,Math.min(1,t));
+  for(let i=1;i<ELEV_RAMP.length;i++){
+    const a=ELEV_RAMP[i-1],b=ELEV_RAMP[i];
+    if(t<=b.t){const f=(t-a.t)/(b.t-a.t);return[a.r+(b.r-a.r)*f,a.g+(b.g-a.g)*f,a.b+(b.b-a.b)*f];}
+  }
+  return[0.38,0.26,0.20];
+}
+
+function applyHeatmap(){
+  const pos=geo.attributes.position;
+  const colArr=new Float32Array(pos.count*3);
+  const mode=SURF_MODE;
+  // Compute min/max for normalization
+  let mn=Infinity,mx=-Infinity;
+  for(let i=0;i<elevData.length;i++){const e=elevData[i];if(e>-500){mn=Math.min(mn,e);mx=Math.max(mx,e);}}
+  const range=mx-mn||1;
+  let accMax=1;
+  if(mode==='flow'&&flowAcc.length){for(let i=0;i<flowAcc.length;i++) if(flowAcc[i]>accMax) accMax=flowAcc[i];}
+
+  for(let vi=0;vi<pos.count;vi++){
+    const c=vi%GRID,r=Math.floor(vi/GRID);
+    let col;
+    if(mode==='elevation'){
+      col=rampColor((elevData[r*GRID+c]-mn)/range);
+    } else if(mode==='flow'){
+      const a=flowAcc[r*GRID+c]||0;
+      const t=Math.pow(Math.log(a+1)/Math.log(accMax+1), 0.5); // log+sqrt for contrast
+      // Dry (warm tan) → wet (bright blue)
+      col=[0.72-t*0.65, 0.58-t*0.25, 0.38+t*0.55];
+    } else {
+      col=[1,1,1]; // white = satellite shows through
+    }
+    colArr[vi*3]=col[0]; colArr[vi*3+1]=col[1]; colArr[vi*3+2]=col[2];
+  }
+  if(!geo.attributes.color){
+    geo.setAttribute('color',new THREE.BufferAttribute(colArr,3));
+  } else {
+    geo.attributes.color.array.set(colArr);
+    geo.attributes.color.needsUpdate=true;
+  }
+  tmat.vertexColors=(mode!=='satellite');
+  tmat.map=(mode==='satellite'&&tmat._satTex)?tmat._satTex:null;
+  tmat.needsUpdate=true;
+}
+
+// ─── Geological sides ────────────────────────────────────────────────────────
+// Realistic soil horizons: grass/root zone, dark topsoil, orange subsoil, pale clay, sandy sediment, bedrock
+const STRATA=[
+  {c:0x2d4a1e,c2:0x3a5c25,f:.05,name:'Root zone'},     // dark green-brown
+  {c:0x3d2510,c2:0x4a2e14,f:.12,name:'Topsoil (A)'},    // very dark brown
+  {c:0x7a3e1a,c2:0x8f4e22,f:.20,name:'Subsoil (B)'},    // rich orange-brown
+  {c:0xb87830,c2:0xc98840,f:.18,name:'Weathered rock'}, // warm orange
+  {c:0x8a7060,c2:0x9a8070,f:.20,name:'Clay layer (C)'}, // grey-brown clay
+  {c:0x4a3828,c2:0x3a2818,f:.25,name:'Bedrock (R)'},    // dark charcoal
+];
+const sidesG=new THREE.Group(); scene.add(sidesG);
+
+function buildSides(minY){
+  sidesG.clear();
+  const depth=28,hw=WW/2,hd=WH/2;
+  let cy=minY;
+  for(const s of STRATA){
+    const h=s.f*depth,y1=cy-h;
+    // Each stratum gets 2-tone vertex coloring for natural variation
+    const mat=new THREE.MeshStandardMaterial({color:s.c,roughness:.92,metalness:0.02,side:THREE.DoubleSide});
+    const quads=[
+      [[-hw,cy,-hd],[hw,cy,-hd],[hw,y1,-hd],[-hw,y1,-hd]],
+      [[hw,cy,hd],[-hw,cy,hd],[-hw,y1,hd],[hw,y1,hd]],
+      [[-hw,cy,hd],[-hw,cy,-hd],[-hw,y1,-hd],[-hw,y1,hd]],
+      [[hw,cy,-hd],[hw,cy,hd],[hw,y1,hd],[hw,y1,-hd]],
+    ];
+    for(const q of quads){
+      const v=new Float32Array(q.flatMap(p=>p)),i=new Uint16Array([0,1,2,0,2,3]);
+      const g=new THREE.BufferGeometry();
+      g.setAttribute('position',new THREE.BufferAttribute(v,3));
+      g.setIndex(new THREE.BufferAttribute(i,1));
+      // Vertex colors — top of stratum lighter, bottom darker
+      const c1=new THREE.Color(s.c), c2=new THREE.Color(s.c2||s.c);
+      const cols=new Float32Array([c1.r,c1.g,c1.b, c1.r,c1.g,c1.b, c2.r,c2.g,c2.b, c2.r,c2.g,c2.b]);
+      g.setAttribute('color',new THREE.BufferAttribute(cols,3));
+      g.computeVertexNormals();
+      const m=mat.clone(); m.vertexColors=true;
+      sidesG.add(new THREE.Mesh(g,m));
+    }
+    // Thin seam line between strata
+    const lpts=[new THREE.Vector3(-hw,cy,-hd),new THREE.Vector3(hw,cy,-hd),new THREE.Vector3(hw,cy,hd),new THREE.Vector3(-hw,cy,hd),new THREE.Vector3(-hw,cy,-hd)];
+    sidesG.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(lpts),new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:.25})));
+    cy=y1;
+  }
+  const bv=new Float32Array([-hw,cy,-hd,hw,cy,-hd,hw,cy,hd,-hw,cy,hd]);
+  const bi=new Uint16Array([0,1,2,0,2,3]);
+  const bg=new THREE.BufferGeometry();
+  bg.setAttribute('position',new THREE.BufferAttribute(bv,3));
+  bg.setIndex(new THREE.BufferAttribute(bi,1));
+  bg.computeVertexNormals();
+  sidesG.add(new THREE.Mesh(bg,new THREE.MeshStandardMaterial({color:0x201c1a,roughness:1,side:THREE.DoubleSide})));
+}
+
+// ─── Tile helpers ─────────────────────────────────────────────────────────────
+const lon2t=(lon,z)=>Math.floor((lon+180)/360*2**z);
+const lat2t=(lat,z)=>Math.floor((1-Math.log(Math.tan(lat*Math.PI/180)+1/Math.cos(lat*Math.PI/180))/Math.PI)/2*2**z);
+const t2lon=(t,z)=>t/2**z*360-180;
+const t2lat=(t,z)=>{const n=Math.PI-2*Math.PI*t/2**z;return 180/Math.PI*Math.atan(.5*(Math.exp(n)-Math.exp(-n)));};
+const loadImg=url=>new Promise((res,rej)=>{const i=new Image();i.crossOrigin='anonymous';i.onload=()=>res(i);i.onerror=rej;i.src=url;});
+
+async function loadTiles(urlFn){
+  const txMn=lon2t(BBOX.w,Z),txMx=lon2t(BBOX.e,Z);
+  const tyMn=lat2t(BBOX.n,Z),tyMx=lat2t(BBOX.s,Z);
+  const ts=256,cols=txMx-txMn+1,rows=tyMx-tyMn+1;
+  const cv=document.createElement('canvas');
+  cv.width=cols*ts; cv.height=rows*ts;
+  const cx=cv.getContext('2d');
+  for(let tx=txMn;tx<=txMx;tx++)
+    for(let ty=tyMn;ty<=tyMx;ty++)
+      try{cx.drawImage(await loadImg(urlFn(tx,ty)),(tx-txMn)*ts,(ty-tyMn)*ts);}catch(e){}
+  return {canvas:cv,txMn,txMx,tyMn,tyMx};
+}
+
+// ─── Load DEM ────────────────────────────────────────────────────────────────
+async function loadElev(){
+  setStatus('Loading DEM tiles…');
+  const {canvas:cv,txMn,txMx,tyMn,tyMx}=await loadTiles((tx,ty)=>`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${Z}/${tx}/${ty}.png`);
+  const {data:px}=cv.getContext('2d').getImageData(0,0,cv.width,cv.height);
+  const cw=cv.width,ch=cv.height;
+  const tileW=t2lon(txMx+1,Z)-t2lon(txMn,Z);
+  const tileH=t2lat(tyMn,Z)-t2lat(tyMx+1,Z);
+  const oLon=t2lon(txMn,Z),oLat=t2lat(tyMn,Z);
+  let mn=Infinity,mx=-Infinity;
+  for(let r=0;r<GRID;r++)for(let c=0;c<GRID;c++){
+    const lon=BBOX.w+(c/(GRID-1))*(BBOX.e-BBOX.w);
+    const lat=BBOX.n-(r/(GRID-1))*(BBOX.n-BBOX.s);
+    const px_x=Math.min(cw-1,Math.max(0,Math.floor(((lon-oLon)/tileW)*cw)));
+    const px_y=Math.min(ch-1,Math.max(0,Math.floor(((oLat-lat)/tileH)*ch)));
+    const i4=(px_y*cw+px_x)*4;
+    const e=(px[i4]*256+px[i4+1]+px[i4+2]/256)-32768;
+    elevData[r*GRID+c]=e; if(e>-500){mn=Math.min(mn,e);mx=Math.max(mx,e);}
+  }
+  setStatus(`DEM ${mn.toFixed(0)}–${mx.toFixed(0)} m · Computing hydrology…`);
+  applyElev(mn,mx);
+}
+
+function applyElev(mn0,mx0){
+  let mn=mn0,mx=mx0;
+  if(mn===undefined){
+    mn=Infinity;mx=-Infinity;
+    for(let i=0;i<elevData.length;i++){const e=elevData[i];if(e>-500){mn=Math.min(mn,e);mx=Math.max(mx,e);}}
+  }
+  const range=mx-mn||1;
+  const scale=Math.max((range/180)*ES, ES*0.35);
+  const pos=geo.attributes.position;
+  for(let i=0;i<pos.count;i++){
+    const c=i%GRID,r=Math.floor(i/GRID);
+    const e=elevData[r*GRID+c];
+    pos.setY(i,e>-500?((e-mn)/range)*scale:0);
+  }
+  pos.needsUpdate=true; geo.computeVertexNormals();
+  let minY=Infinity;
+  for(let i=0;i<pos.count;i++)minY=Math.min(minY,pos.getY(i));
+  buildSides(minY);
+  computeHydrology(); // calls applyHeatmap at end
+}
+
+// ─── D8 Hydrology ────────────────────────────────────────────────────────────
+// 8 neighbours: dr,dc, and diagonal distance factor
+const D8 = [[-1,0,1],[-1,1,Math.SQRT2],[0,1,1],[1,1,Math.SQRT2],[1,0,1],[1,-1,Math.SQRT2],[0,-1,1],[-1,-1,Math.SQRT2]];
+
+let flowDir = new Int8Array(GRID*GRID).fill(-1);
+let flowAcc = new Float32Array(GRID*GRID).fill(0);
+let upstream = [];
+let pondSites = [];
+let streamCells = [];
+let watershedCells = new Uint8Array(GRID*GRID);
+let outletIdx = -1;
+
+// ─── Particle system ─────────────────────────────────────────────────────────
+let allPaths = [];           // [{pts: Vector3[], acc: number}]
+let particlePoints = null;   // THREE.Points
+const PARTICLE_COUNT = 600;
+const particleState = [];    // [{pathIdx, t, speed}]
+let RAIN_INTENSITY = 0.4;
+const clock = new THREE.Clock();
+
+function idx(r,c){ return r*GRID+c; }
+
+// Gaussian blur for DEM pre-processing (removes flat-field noise for better D8)
+function gaussianBlur(data, G, sigma){
+  const ks=Math.ceil(sigma*3)*2+1, half=Math.floor(ks/2);
+  const k=[]; let ks2=0;
+  for(let i=0;i<ks;i++){const x=i-half; k.push(Math.exp(-x*x/(2*sigma*sigma))); ks2+=k[k.length-1];}
+  k.forEach((_,i)=>k[i]/=ks2);
+  const tmp=new Float32Array(G*G), out=new Float32Array(G*G);
+  for(let r=0;r<G;r++)for(let c=0;c<G;c++){
+    let v=0; for(let i=0;i<ks;i++){const cc=Math.min(G-1,Math.max(0,c+i-half)); v+=data[r*G+cc]*k[i];} tmp[r*G+c]=v;
+  }
+  for(let r=0;r<G;r++)for(let c=0;c<G;c++){
+    let v=0; for(let i=0;i<ks;i++){const rr=Math.min(G-1,Math.max(0,r+i-half)); v+=tmp[rr*G+c]*k[i];} out[r*G+c]=v;
+  }
+  return out;
+}
+
+function computeHydrology(){
+  const G = GRID;
+
+  // ── 1. Smooth DEM to remove small-scale irrigation-field noise ──────────
+  // sigma=4 cells ≈ 320 m — preserves valleys but removes flat-field traps
+  const elev = gaussianBlur(elevData, G, 4);
+
+  // ── 2. D8 flow direction ──────────────────────────────────────────────
+  flowDir.fill(-1);
+  for(let r=0;r<G;r++) for(let c=0;c<G;c++){
+    if(r===0||r===G-1||c===0||c===G-1){flowDir[idx(r,c)]=-1;continue;}
+    const e=elev[idx(r,c)];
+    let maxDrop=-Infinity, bestDir=-1;
+    for(let d=0;d<8;d++){
+      const[dr,dc,dist]=D8[d];
+      const nr=r+dr,nc=c+dc;
+      if(nr<0||nr>=G||nc<0||nc>=G)continue;
+      const drop=(e-elev[idx(nr,nc)])/dist;
+      if(drop>maxDrop){maxDrop=drop;bestDir=d;}
+    }
+    flowDir[idx(r,c)]=bestDir;
+  }
+
+  // ── 3. Flow accumulation (topological sort by elevation desc) ─────────
+  flowAcc.fill(1);
+  const order=[];
+  for(let i=0;i<G*G;i++) order.push(i);
+  order.sort((a,b)=>elev[b]-elev[a]); // highest first
+  for(const i of order){
+    const d=flowDir[i];
+    if(d<0)continue;
+    const r=Math.floor(i/G),c=i%G;
+    const[dr,dc]=D8[d];
+    const nr=r+dr,nc=c+dc;
+    if(nr>=0&&nr<G&&nc>=0&&nc<G) flowAcc[idx(nr,nc)]+=flowAcc[i];
+  }
+
+  // ── 4. Auto-threshold: percentile of accumulation values ─────────────
+  const accVals = Array.from(flowAcc).sort((a,b)=>a-b);
+  const pct = STREAM_DETAIL==='fine' ? 0.94 : STREAM_DETAIL==='coarse' ? 0.985 : 0.97;
+  STREAM_THRESH = accVals[Math.floor(accVals.length * pct)];
+
+  streamCells=[];
+  for(let i=0;i<G*G;i++) if(flowAcc[i]>=STREAM_THRESH) streamCells.push(i);
+
+  // ── 5. Build reverse-flow map (upstream lookup) ───────────────────────
+  upstream=Array.from({length:G*G},()=>[]);
+  for(let i=0;i<G*G;i++){
+    const d=flowDir[i]; if(d<0)continue;
+    const r=Math.floor(i/G),c=i%G;
+    const[dr,dc]=D8[d];
+    const nr=r+dr,nc=c+dc;
+    if(nr>=0&&nr<G&&nc>=0&&nc<G) upstream[idx(nr,nc)].push(i);
+  }
+
+  // ── 6. Find the single outlet = border cell with highest accumulation ─
+  outletIdx=-1; let outletAcc=0;
+  for(let r=0;r<G;r++) for(let c=0;c<G;c++){
+    if(r===0||r===G-1||c===0||c===G-1){
+      const a=flowAcc[idx(r,c)];
+      if(a>outletAcc){outletAcc=a;outletIdx=idx(r,c);}
+    }
+  }
+
+  // ── 7. Watershed = BFS upstream from outlet ───────────────────────────
+  watershedCells.fill(0);
+  if(outletIdx>=0){
+    const q=[outletIdx]; const vis=new Uint8Array(G*G); vis[outletIdx]=1; watershedCells[outletIdx]=1;
+    while(q.length){
+      const ci=q.shift();
+      for(const ui of upstream[ci]) if(!vis[ui]){vis[ui]=1;watershedCells[ui]=1;q.push(ui);}
+    }
+  }
+
+  // ── 8. Pond sites = tributary junctions just upstream of stream network
+  // A junction: stream cell that has 2+ upstream stream cells flowing in
+  pondSites=[];
+  for(const i of streamCells){
+    const upStream=upstream[i].filter(u=>flowAcc[u]>=STREAM_THRESH);
+    if(upStream.length>=2){
+      const r=Math.floor(i/G),c=i%G;
+      // Must not be too close to edge or to another pond
+      if(r<5||r>G-5||c<5||c>G-5) continue;
+      const tooClose=pondSites.some(p=>Math.abs(p.r-r)+Math.abs(p.c-c)<12);
+      if(!tooClose){
+        const storage=Math.round(800+flowAcc[i]*3);
+        pondSites.push({r,c,acc:flowAcc[i],storage,cls:pondSites.length===0?'High':'Medium'});
+        if(pondSites.length>=2) break;
+      }
+    }
+  }
+  // Fallback: if no junctions found, pick top-2 stream cells by acc far from edges
+  if(pondSites.length<2){
+    const candidates=[...streamCells]
+      .filter(i=>{const r=Math.floor(i/G),c=i%G;return r>5&&r<G-5&&c>5&&c<G-5;})
+      .sort((a,b)=>flowAcc[b]-flowAcc[a]);
+    for(const i of candidates){
+      const r=Math.floor(i/G),c=i%G;
+      const tooClose=pondSites.some(p=>Math.abs(p.r-r)+Math.abs(p.c-c)<12);
+      if(!tooClose){
+        pondSites.push({r,c,acc:flowAcc[i],storage:Math.round(600+flowAcc[i]*2),cls:pondSites.length===0?'High':'Medium'});
+        if(pondSites.length>=2) break;
+      }
+    }
+  }
+
+  setStatus(s=>s.replace('Computing hydrology…',`${streamCells.length} stream cells · ${pondSites.length} pond sites · outlet acc ${outletAcc.toFixed(0)}`));
+  applyHeatmap();
+  rebuildOverlays();
+}
+
+// ─── Coordinate helpers ──────────────────────────────────────────────────────
+function rc2ll(r,c){ return [BBOX.w+(c/(GRID-1))*(BBOX.e-BBOX.w), BBOX.n-(r/(GRID-1))*(BBOX.n-BBOX.s)]; }
+function ll2w(lon,lat){ return [((lon-CX)/(BBOX.e-BBOX.w))*WW,-((lat-CY)/(BBOX.n-BBOX.s))*WH]; }
+function worldY(r,c){ return geo.attributes.position.getY(Math.min(GRID*GRID-1,Math.max(0,r*GRID+c))); }
+function rc2v3(r,c,dy=0){ const[lon,lat]=rc2ll(r,c);const[x,z]=ll2w(lon,lat);return new THREE.Vector3(x,worldY(r,c)+dy,z); }
+
+// Trace a flow path from cell (r,c) downstream for maxSteps steps
+function traceDownstream(r,c,maxSteps=200){
+  const pts=[]; let cr=r,cc=c;
+  const visited=new Set();
+  for(let s=0;s<maxSteps;s++){
+    const i=idx(cr,cc);
+    if(visited.has(i))break; visited.add(i);
+    pts.push(rc2v3(cr,cc,0.35));
+    const d=flowDir[i]; if(d<0)break;
+    const[dr,dc]=D8[d];
+    cr+=dr; cc+=dc;
+    if(cr<0||cr>=GRID||cc<0||cc>=GRID)break;
+  }
+  return pts;
+}
+
+// ─── Overlay groups ───────────────────────────────────────────────────────────
+const flowG=new THREE.Group(); scene.add(flowG);
+const pondG=new THREE.Group(); scene.add(pondG);
+const wshdG=new THREE.Group(); scene.add(wshdG);
+
+function rebuildOverlays(){
+  rebuildFlow();
+  rebuildPonds();
+  rebuildWatershed();
+  rebuildParticles();
+}
+
+function rebuildFlow(){
+  flowG.clear();
+  allPaths = [];
+  if(!streamCells.length) return;
+
+  const maxAcc=Math.max(...streamCells.map(i=>flowAcc[i]));
+  const streamSet=new Set(streamCells);
+
+  // ── Trace continuous paths from every headwater to outlet ────────────
+  const headwaters=streamCells.filter(i=>!upstream[i].some(u=>streamSet.has(u)));
+
+  // ── Build non-overlapping stream paths from outlet upstream ─────────────
+  // Each cell visited exactly once → clean dendritic tree, no overlaps
+  const drawn=new Set();
+
+  function traceBranch(startCell){
+    if(drawn.has(startCell)||!streamSet.has(startCell)) return;
+    const cells=[];
+    let ci=startCell;
+    while(ci>=0&&!drawn.has(ci)&&streamSet.has(ci)){
+      drawn.add(ci);
+      cells.push(ci);
+      // Follow the highest-acc upstream branch (main continuation)
+      const ups=upstream[ci].filter(u=>streamSet.has(u)&&!drawn.has(u));
+      if(!ups.length) break;
+      ci=ups.reduce((b,u)=>flowAcc[u]>flowAcc[b]?u:b, ups[0]);
+    }
+    if(cells.length>=2){
+      const pts=cells.map(c=>rc2v3(Math.floor(c/GRID),c%GRID,0.5));
+      // acc at the entry point (most downstream end = cells[0])
+      allPaths.push({pts, acc:flowAcc[cells[0]]});
+    }
+    // Recursively process side tributaries
+    for(const cell of cells){
+      for(const u of upstream[cell]){
+        if(streamSet.has(u)&&!drawn.has(u)) traceBranch(u);
+      }
+    }
+  }
+
+  // Start from the outlet (highest acc border cell)
+  const startCell= outletIdx>=0&&streamSet.has(outletIdx)
+    ? outletIdx
+    : streamCells.reduce((b,i)=>flowAcc[i]>flowAcc[b]?i:b, streamCells[0]);
+  traceBranch(startCell);
+
+  // Any remaining stream cells not reachable from outlet
+  for(const ci of streamCells) if(!drawn.has(ci)) traceBranch(ci);
+
+  if(!document.getElementById('tFlow').checked) return;
+
+  // ── Render stream network ──────────────────────────────────────────────
+  // Long branches (≥8 cells) → TubeGeometry (3D, visible from any angle)
+  // Short branches            → flat glow line segments (still shows network)
+  const logMax=Math.log10(maxAcc+1);
+  const glowPts=[];
+
+  for(const path of allPaths){
+    const normAcc=Math.log10(path.acc+1)/logMax;
+    const n=path.pts.length;
+
+    if(n>=8){
+      // Render as 3D tube
+      const radius=0.04+normAcc*0.38; // 0.04 trib → 0.42 main
+      const step=Math.max(1,Math.floor(n/50));
+      const ctrl=path.pts.filter((_,i)=>i%step===0||i===n-1);
+      if(ctrl.length<2){glowPts.push(...path.pts);continue;}
+      try{
+        const curve=new THREE.CatmullRomCurve3(ctrl);
+        const segs=Math.min(ctrl.length*4,80);
+        const rSegs=normAcc>0.5?8:6;
+        const tubeGeo=new THREE.TubeGeometry(curve,segs,radius,rSegs,false);
+        flowG.add(new THREE.Mesh(tubeGeo, new THREE.MeshStandardMaterial({
+          color: normAcc>0.65?0x0044aa: normAcc>0.35?0x0066cc: 0x0088dd,
+          emissive: normAcc>0.65?0x001133: 0x001a44,
+          emissiveIntensity:1.2,
+          roughness:0.04, metalness:0.1, transparent:true, opacity:0.92,
+        })));
+      }catch(e){ glowPts.push(...path.pts); }
+    } else {
+      // Short branch — add as glow line
+      for(let i=0;i<n-1;i++){ glowPts.push(path.pts[i]); glowPts.push(path.pts[i+1]); }
+    }
+  }
+
+  // Glow overlay for short channels
+  if(glowPts.length>=2){
+    flowG.add(new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(glowPts),
+      new THREE.LineBasicMaterial({color:0x44aaff,transparent:true,opacity:0.6})
+    ));
+  }
+
+  // ── Outlet marker ─────────────────────────────────────────────────────
+  if(outletIdx>=0){
+    const or2=Math.floor(outletIdx/GRID), oc=outletIdx%GRID;
+    const[ox,oz]=ll2w(...rc2ll(or2,oc));
+    const oy=worldY(or2,oc);
+    for(let i=1;i<=4;i++){
+      const ring=new THREE.Mesh(
+        new THREE.RingGeometry(i*1.0,i*1.0+0.25,32),
+        new THREE.MeshBasicMaterial({color:0x00ffaa,transparent:true,opacity:0.45/i,side:THREE.DoubleSide})
+      );
+      ring.rotation.x=-Math.PI/2; ring.position.set(ox,oy+0.3,oz);
+      flowG.add(ring);
+    }
+    const outLabel=document.createElement('div');
+    outLabel.style.cssText='background:rgba(0,25,15,0.9);border:1px solid #00ffaa;border-radius:3px;padding:3px 8px;color:#00ffaa;font-family:Courier New;font-size:10px;pointer-events:none;white-space:nowrap;';
+    outLabel.textContent='▼ Watershed outlet';
+    const outObj=new CSS2DObject(outLabel);
+    outObj.position.set(ox,oy+6,oz);
+    flowG.add(outObj);
+  }
+}
+
+function rebuildPonds(){
+  pondG.clear();
+  if(!document.getElementById('tPonds').checked) return;
+
+  pondSites.forEach((p,pi)=>{
+    const[x,z]=ll2w(...rc2ll(p.r,p.c));
+    const y=worldY(p.r,p.c);
+    const hi=p.cls==='High';
+    const r=hi?3.8:3.0; // fixed visible size
+
+    // Water disc
+    const disc=new THREE.Mesh(new THREE.CircleGeometry(r,48),
+      new THREE.MeshStandardMaterial({color:hi?0x0099dd:0x006699,
+        emissive:hi?0x004488:0x002244,emissiveIntensity:1.0,
+        roughness:0.05,metalness:0.5,transparent:true,opacity:0.93}));
+    disc.rotation.x=-Math.PI/2; disc.position.set(x,y+0.25,z);
+    pondG.add(disc);
+
+    // Bright specular highlight
+    const shine=new THREE.Mesh(new THREE.CircleGeometry(r*0.35,32),
+      new THREE.MeshBasicMaterial({color:0xaaddff,transparent:true,opacity:0.55}));
+    shine.rotation.x=-Math.PI/2; shine.position.set(x-r*0.2,y+0.3,z-r*0.2);
+    pondG.add(shine);
+
+    // 3 concentric glow rings — clear and bright
+    for(let i=1;i<=3;i++){
+      const ro=r*(1+i*0.45), ri=ro-0.22;
+      const ring=new THREE.Mesh(new THREE.RingGeometry(ri,ro,48),
+        new THREE.MeshBasicMaterial({color:hi?0x00ddff:0x0099cc,
+          transparent:true,opacity:0.45/i,side:THREE.DoubleSide}));
+      ring.rotation.x=-Math.PI/2; ring.position.set(x,y+0.3+i*0.06,z);
+      pondG.add(ring);
+    }
+
+    // Vertical stem — taller so visible from orbit view
+    const stem=new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.1,10,8),
+      new THREE.MeshBasicMaterial({color:hi?0x00eeff:0x0099cc}));
+    stem.position.set(x,y+5,z); pondG.add(stem);
+
+    // Glowing cap — emissiveIntensity high so it burns through
+    const cap=new THREE.Mesh(new THREE.SphereGeometry(0.55,12,12),
+      new THREE.MeshStandardMaterial({color:hi?0x00ffff:0x00ccee,
+        emissive:hi?0x00ffff:0x00bbdd,emissiveIntensity:3.0,roughness:0,metalness:1}));
+    cap.position.set(x,y+10.2,z); pondG.add(cap);
+
+    // CSS2D label — clearly offset left vs right
+    const div=document.createElement('div');
+    div.className='pond-label';
+    div.innerHTML=`<span class="${hi?'hi':'md'}">● Site ${pi===0?'A':'B'} · ${p.cls}</span><br>${(p.storage/1000).toFixed(1)}k m³ · ~${Math.min(92,50+pi*8)}% fill`;
+    const lbl=new CSS2DObject(div);
+    lbl.position.set(x+(pi===0?-8:8), y+13, z+(pi===0?2:-2));
+    pondG.add(lbl);
+  });
+}
+
+function rebuildParticles(){
+  if(particlePoints){scene.remove(particlePoints);particlePoints=null;}
+  particleState.length=0;
+  if(!allPaths.length||RAIN_INTENSITY<0.01) return;
+
+  // Weight path selection by accumulation — bigger streams get more particles
+  const totalAcc=allPaths.reduce((s,p)=>s+p.acc,0);
+  const positions=new Float32Array(PARTICLE_COUNT*3);
+  const colors=new Float32Array(PARTICLE_COUNT*3);
+
+  for(let pi=0;pi<PARTICLE_COUNT;pi++){
+    // Pick a path weighted by accumulation
+    let r=Math.random()*totalAcc, pathIdx=0;
+    for(let j=0;j<allPaths.length;j++){r-=allPaths[j].acc;if(r<=0){pathIdx=j;break;}}
+    const path=allPaths[pathIdx];
+    const t=Math.random(); // start at random position along path
+    const speed=0.04+Math.random()*0.08; // vary speed — main channels faster
+    particleState.push({pathIdx,t,speed});
+
+    // Initial position interpolated along path
+    const n=path.pts.length;
+    const fi=t*(n-1), lo=Math.floor(fi), frac=fi-lo;
+    const p0=path.pts[lo], p1=path.pts[Math.min(n-1,lo+1)];
+    positions[pi*3]  =p0.x+(p1.x-p0.x)*frac;
+    positions[pi*3+1]=p0.y+(p1.y-p0.y)*frac+0.8;
+    positions[pi*3+2]=p0.z+(p1.z-p0.z)*frac;
+
+    // Color: bright white-blue
+    colors[pi*3]=0.5+Math.random()*0.5;
+    colors[pi*3+1]=0.8+Math.random()*0.2;
+    colors[pi*3+2]=1.0;
+  }
+
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(positions,3));
+  geo.setAttribute('color',new THREE.BufferAttribute(colors,3));
+  const mat=new THREE.PointsMaterial({
+    size:1.1, vertexColors:true, transparent:true, opacity:0.9,
+    blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true,
+  });
+  particlePoints=new THREE.Points(geo,mat);
+  scene.add(particlePoints);
+}
+
+function animateParticles(dt){
+  if(!particlePoints||!particleState.length) return;
+  const pos=particlePoints.geometry.attributes.position;
+  const speed=RAIN_INTENSITY;
+
+  for(let pi=0;pi<particleState.length;pi++){
+    const st=particleState[pi];
+    st.t+=st.speed*speed*dt*4;
+
+    if(st.t>=1.0){
+      // Respawn at start of a random path
+      const totalAcc=allPaths.reduce((s,p)=>s+p.acc,0);
+      let r=Math.random()*totalAcc;
+      for(let j=0;j<allPaths.length;j++){r-=allPaths[j].acc;if(r<=0){st.pathIdx=j;break;}}
+      st.t=Math.random()*0.15; // start near top
+      st.speed=0.04+Math.random()*0.08;
+    }
+
+    const path=allPaths[st.pathIdx];
+    const n=path.pts.length;
+    const fi=st.t*(n-1), lo=Math.floor(fi), frac=fi-lo;
+    const p0=path.pts[lo], p1=path.pts[Math.min(n-1,lo+1)];
+    pos.setXYZ(pi,
+      p0.x+(p1.x-p0.x)*frac,
+      p0.y+(p1.y-p0.y)*frac+0.8,
+      p0.z+(p1.z-p0.z)*frac
+    );
+  }
+  pos.needsUpdate=true;
+}
+
+function rebuildWatershed(){
+  wshdG.clear();
+  if(!document.getElementById('tBoundary').checked) return;
+
+  // Extract watershed boundary as ordered perimeter cells
+  const boundary=[];
+  for(let r=0;r<GRID;r++) for(let c=0;c<GRID;c++){
+    if(!watershedCells[idx(r,c)]) continue;
+    // Is it on the edge of the watershed?
+    let edge=false;
+    for(const[dr,dc] of D8){
+      const nr=r+dr,nc=c+dc;
+      if(nr<0||nr>=GRID||nc<0||nc>=GRID||!watershedCells[idx(nr,nc)]){edge=true;break;}
+    }
+    if(edge) boundary.push({r,c});
+  }
+
+  if(boundary.length<4){wshdG.add(new THREE.Object3D());return;}
+
+  // Order boundary cells by angle from centroid
+  const cr=boundary.reduce((s,p)=>s+p.r,0)/boundary.length;
+  const cc=boundary.reduce((s,p)=>s+p.c,0)/boundary.length;
+  boundary.sort((a,b)=>Math.atan2(a.r-cr,a.c-cc)-Math.atan2(b.r-cr,b.c-cc));
+
+  // Thin to ~60 points max
+  const step=Math.max(1,Math.floor(boundary.length/60));
+  const pts=boundary.filter((_,i)=>i%step===0).map(p=>rc2v3(p.r,p.c,0.55));
+  if(pts.length<3) return;
+
+  wshdG.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([...pts,pts[0]]),
+    new THREE.LineBasicMaterial({color:0x00ff88,transparent:true,opacity:0.8})
+  ));
+
+  // Subtle fill
+  const shape=new THREE.Shape(pts.map(p=>new THREE.Vector2(p.x,p.z)));
+  const sg=new THREE.ShapeGeometry(shape); sg.rotateX(-Math.PI/2);
+  wshdG.add(new THREE.Mesh(sg,new THREE.MeshBasicMaterial({color:0x00ff66,transparent:true,opacity:0.05,side:THREE.DoubleSide})));
+}
+
+// ─── Satellite ───────────────────────────────────────────────────────────────
+async function loadSat(){
+  setStatus(s=>s+' · Sat…');
+  const {canvas:cv}=await loadTiles((tx,ty)=>`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${Z}/${ty}/${tx}`);
+  const tex=new THREE.CanvasTexture(cv); tex.colorSpace=THREE.SRGBColorSpace;
+  tmat._satTex=tex; tmat.map=tex; tmat.vertexColors=false; tmat.needsUpdate=true;
+  setStatus(s=>s.replace(' · Sat…','')+' · Sat ✓ — drag to orbit');
+}
+
+// ─── UI ───────────────────────────────────────────────────────────────────────
+document.getElementById('elev').addEventListener('input',e=>{ES=parseFloat(e.target.value);document.getElementById('elevv').textContent=ES;applyElev();});
+document.getElementById('thresh').addEventListener('change',e=>{STREAM_DETAIL=e.target.value;computeHydrology();});
+document.getElementById('sun').addEventListener('input',e=>{const a=parseFloat(e.target.value)*Math.PI/180;sun.position.set(Math.cos(a)*80,90,Math.sin(a)*80);document.getElementById('sunv').textContent=e.target.value+'°';});
+document.getElementById('bright').addEventListener('input',e=>{const b=parseFloat(e.target.value);sun.intensity=b*1.6;amb.intensity=b*0.65;document.getElementById('brightv').textContent=b;});
+document.getElementById('surfMode').addEventListener('change',e=>{SURF_MODE=e.target.value;applyHeatmap();});
+document.getElementById('rain').addEventListener('input',e=>{RAIN_INTENSITY=parseInt(e.target.value)/100;document.getElementById('rainv').textContent=e.target.value+'%';if(RAIN_INTENSITY<0.01)rebuildParticles();else if(!particlePoints)rebuildParticles();});
+['tFlow','tPonds','tBoundary'].forEach(id=>document.getElementById(id).addEventListener('change',rebuildOverlays));
+document.getElementById('tSides').addEventListener('change',e=>sidesG.visible=e.target.checked);
+
+function setStatus(v){const el=document.getElementById('status');el.textContent=typeof v==='function'?v(el.textContent):v;}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+await loadElev();
+await loadSat();
+
+// ─── Render loop ──────────────────────────────────────────────────────────────
+(function animate(){
+  requestAnimationFrame(animate);
+  const dt=Math.min(clock.getDelta(),0.05);
+  animateParticles(dt);
+  ctrl.update();
+  renderer.render(scene,cam);
+  labelRenderer.render(scene,cam);
+})();
+window.addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);labelRenderer.setSize(innerWidth,innerHeight);});
+</script>
+</body>
+</html>

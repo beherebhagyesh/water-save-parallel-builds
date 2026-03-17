@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Soil Cross-Section Viewer</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#08101a;
+  font-family:'Courier New',monospace;
+  color:#c9d1d9;
+  overflow:hidden;
+  height:100vh;
+  display:flex;
+  flex-direction:column;
+}
+
+#main-layout {
+  display:flex;
+  flex:1;
+  overflow:hidden;
+}
+
+#left-panel {
+  width:60%;
+  position:relative;
+  border-right:1px solid #1a3040;
+}
+
+#three-container {
+  width:100%;
+  height:100%;
+}
+
+#right-panel {
+  width:40%;
+  position:relative;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+}
+
+#right-panel canvas {
+  flex:1;
+}
+
+#bottom-bar {
+  height:130px;
+  background:rgba(6,10,15,0.95);
+  border-top:1px solid #1a3040;
+  padding:10px 20px;
+  display:flex;
+  align-items:flex-start;
+  gap:20px;
+  flex-shrink:0;
+}
+
+#layer-stats {
+  flex:1;
+}
+
+#layer-stats h4 {
+  color:#39d0f0;
+  font-size:10px;
+  letter-spacing:2px;
+  margin-bottom:6px;
+}
+
+#stats-table {
+  font-size:10px;
+  border-collapse:collapse;
+  width:100%;
+}
+
+#stats-table td {
+  padding:2px 8px;
+  border:1px solid #1a3040;
+  color:#c9d1d9;
+}
+
+#stats-table td:first-child {
+  color:#39d0f0;
+  width:130px;
+}
+
+#controls-area {
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  align-items:flex-start;
+  min-width:200px;
+}
+
+#controls-area h4 {
+  color:#39d0f0;
+  font-size:10px;
+  letter-spacing:2px;
+}
+
+.btn {
+  padding:6px 14px;
+  background:rgba(57,208,240,0.08);
+  border:1px solid #39d0f0;
+  color:#39d0f0;
+  font-family:'Courier New',monospace;
+  font-size:10px;
+  letter-spacing:1px;
+  cursor:pointer;
+  border-radius:3px;
+  transition:background .2s;
+}
+
+.btn:hover { background:rgba(57,208,240,0.18); }
+.btn.active { background:rgba(57,208,240,0.25); }
+
+.slider-row {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:10px;
+  color:#8b949e;
+}
+
+input[type=range] {
+  width:100px;
+  accent-color:#39d0f0;
+}
+
+#panel-title {
+  position:absolute;
+  top:8px;
+  left:50%;
+  transform:translateX(-50%);
+  color:#39d0f0;
+  font-size:10px;
+  letter-spacing:3px;
+  z-index:10;
+  pointer-events:none;
+}
+
+#right-title {
+  position:absolute;
+  top:8px;
+  left:50%;
+  transform:translateX(-50%);
+  color:#39d0f0;
+  font-size:10px;
+  letter-spacing:3px;
+  z-index:10;
+  pointer-events:none;
+}
+</style>
+</head>
+<body>
+
+<div id="main-layout">
+  <div id="left-panel">
+    <div id="panel-title">3D ISOMETRIC SOIL BLOCK</div>
+    <div id="three-container"></div>
+  </div>
+  <div id="right-panel">
+    <canvas id="core-canvas"></canvas>
+  </div>
+</div>
+
+<div id="bottom-bar">
+  <div id="layer-stats">
+    <h4>SELECTED LAYER PROPERTIES</h4>
+    <table id="stats-table">
+      <tr>
+        <td>Layer</td>
+        <td id="stat-layer">Topsoil A</td>
+        <td>Depth</td>
+        <td id="stat-depth">0–30 cm</td>
+        <td>Clay %</td>
+        <td id="stat-clay">22%</td>
+      </tr>
+      <tr>
+        <td>Porosity</td>
+        <td id="stat-porosity">48%</td>
+        <td>Infiltration</td>
+        <td id="stat-infil">45 mm/hr</td>
+        <td>Water Retention</td>
+        <td id="stat-wret">High</td>
+      </tr>
+    </table>
+  </div>
+  <div id="controls-area">
+    <h4>RAIN SIMULATION</h4>
+    <button class="btn active" id="rain-toggle">RAIN ON</button>
+    <div class="slider-row">
+      <span>Intensity:</span>
+      <input type="range" id="rain-intensity" min="1" max="10" value="5">
+      <span id="intensity-label">5</span>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ===== LAYER DATA =====
+const LAYERS = [
+  {
+    name: 'HUMUS O',
+    label: 'TOPSOIL A',
+    depth: '0–30 cm',
+    clay: 22, silt: 45, sand: 33,
+    porosity: 48,
+    infiltration: '45 mm/hr',
+    waterRetention: 'High',
+    color: 0x2d1a0e,
+    colorHex: '#2d1a0e',
+    height: 0.6,
+    speed: 2.2,
+    poolable: false
+  },
+  {
+    name: 'SUBSOIL B',
+    label: 'SUBSOIL B',
+    depth: '30–80 cm',
+    clay: 38, silt: 35, sand: 27,
+    porosity: 35,
+    infiltration: '12 mm/hr',
+    waterRetention: 'Medium-High',
+    color: 0x7a3a10,
+    colorHex: '#7a3a10',
+    height: 1.0,
+    speed: 1.0,
+    poolable: true
+  },
+  {
+    name: 'PARENT ROCK C',
+    label: 'PARENT ROCK C',
+    depth: '80–150 cm',
+    clay: 18, silt: 20, sand: 62,
+    porosity: 22,
+    infiltration: '4 mm/hr',
+    waterRetention: 'Low',
+    color: 0x8a7a60,
+    colorHex: '#8a7a60',
+    height: 1.4,
+    speed: 0.35,
+    poolable: false
+  },
+  {
+    name: 'BEDROCK R',
+    label: 'BEDROCK R',
+    depth: '150 cm+',
+    clay: 5, silt: 10, sand: 85,
+    porosity: 2,
+    infiltration: '~0 mm/hr',
+    waterRetention: 'None',
+    color: 0x2a3040,
+    colorHex: '#2a3040',
+    height: 0.8,
+    speed: 0,
+    poolable: true
+  }
+];
+
+// ===== PROCEDURAL TEXTURE GENERATORS =====
+function makeGrassTexture(size=256) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#2d5a1b';
+  ctx.fillRect(0,0,size,size);
+  // variation
+  for(let i=0;i<800;i++) {
+    const x=Math.random()*size, y=Math.random()*size;
+    const r=Math.floor(Math.random()*3+1);
+    const g = Math.random()>0.5 ? '#1e4010' : '#3a7020';
+    ctx.fillStyle=g;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+  // tiny grass blades
+  for(let i=0;i<300;i++) {
+    const x=Math.random()*size, y=Math.random()*size;
+    ctx.strokeStyle='#4a8a28';
+    ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+Math.random()*4-2,y-Math.random()*6); ctx.stroke();
+  }
+  return c;
+}
+
+function makeTopsoilTexture(size=256) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#5a3010';
+  ctx.fillRect(0,0,size,size);
+  for(let i=0;i<1200;i++) {
+    const x=Math.random()*size, y=Math.random()*size;
+    const r=Math.random()*2.5+0.5;
+    const v=Math.floor(Math.random()*50);
+    ctx.fillStyle=`rgb(${80+v},${45+v},${15+v>>1})`;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+  ctx.strokeStyle='rgba(160,100,40,0.5)';
+  ctx.lineWidth=0.7;
+  for(let i=0;i<80;i++) {
+    const x=Math.random()*size, y=Math.random()*size;
+    ctx.beginPath(); ctx.moveTo(x,y);
+    ctx.lineTo(x+Math.random()*20-10, y+Math.random()*20-10); ctx.stroke();
+  }
+  return c;
+}
+
+function makeSubsoilTexture(size=256) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#5a2a08';
+  ctx.fillRect(0,0,size,size);
+  // coarse texture
+  for(let i=0;i<600;i++) {
+    const x=Math.random()*size, y=Math.random()*size;
+    const r=Math.random()*3+1;
+    const v=Math.floor(Math.random()*60);
+    ctx.fillStyle=`rgb(${100+v},${40+v>>1},${8+v>>2})`;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+  // iron nodules
+  for(let i=0;i<40;i++) {
+    const x=Math.random()*size, y=Math.random()*size;
+    const r=Math.random()*4+2;
+    ctx.fillStyle='#c05010';
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ff7030';
+    ctx.beginPath(); ctx.arc(x-r*0.3,y-r*0.3,r*0.4,0,Math.PI*2); ctx.fill();
+  }
+  return c;
+}
+
+function makeParentRockTexture(size=256) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#7a6a50';
+  ctx.fillRect(0,0,size,size);
+  // sand grains
+  for(let i=0;i<800;i++) {
+    const x=Math.random()*size, y=Math.random()*size;
+    const r=Math.random()*3+1;
+    const v=Math.floor(Math.random()*50);
+    ctx.fillStyle=`rgb(${120+v},${105+v},${75+v>>1})`;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+  // angular gravel fragments
+  for(let i=0;i<25;i++) {
+    const x=Math.random()*size, y=Math.random()*size;
+    const n=Math.floor(Math.random()*3+4);
+    ctx.fillStyle=`rgba(90,80,60,0.7)`;
+    ctx.strokeStyle='rgba(60,50,35,0.9)';
+    ctx.lineWidth=0.5;
+    ctx.beginPath();
+    for(let j=0;j<n;j++) {
+      const a=j/n*Math.PI*2+Math.random()*0.5;
+      const r2=Math.random()*8+4;
+      if(j===0) ctx.moveTo(x+Math.cos(a)*r2, y+Math.sin(a)*r2);
+      else ctx.lineTo(x+Math.cos(a)*r2, y+Math.sin(a)*r2);
+    }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  return c;
+}
+
+function makeBedrockTexture(size=256) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#1e2535';
+  ctx.fillRect(0,0,size,size);
+  // angular rock shapes
+  for(let i=0;i<15;i++) {
+    const x=Math.random()*size, y=Math.random()*size;
+    const n=Math.floor(Math.random()*3+5);
+    const v=Math.floor(Math.random()*30);
+    ctx.fillStyle=`rgb(${30+v},${38+v},${55+v})`;
+    ctx.strokeStyle='rgba(10,15,25,0.8)';
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    for(let j=0;j<n;j++) {
+      const a=j/n*Math.PI*2+Math.random()*0.4;
+      const r2=Math.random()*18+10;
+      if(j===0) ctx.moveTo(x+Math.cos(a)*r2, y+Math.sin(a)*r2);
+      else ctx.lineTo(x+Math.cos(a)*r2, y+Math.sin(a)*r2);
+    }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  // crack lines
+  ctx.strokeStyle='rgba(8,12,20,0.9)';
+  ctx.lineWidth=1;
+  for(let i=0;i<12;i++) {
+    ctx.beginPath();
+    const x=Math.random()*size, y=Math.random()*size;
+    ctx.moveTo(x,y);
+    let cx=x,cy=y;
+    for(let s=0;s<4;s++) {
+      cx+=Math.random()*30-15; cy+=Math.random()*20-10;
+      ctx.lineTo(cx,cy);
+    }
+    ctx.stroke();
+  }
+  return c;
+}
+
+function canvasToTexture(canvas, repeat=4) {
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeat, repeat);
+  return tex;
+}
+
+// ===== THREE.JS SETUP =====
+const container = document.getElementById('three-container');
+const W = container.clientWidth, H = container.clientHeight;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(W, H);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x08101a, 1);
+renderer.shadowMap.enabled = true;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+// no fog — it was darkening the scene
+
+const camera = new THREE.PerspectiveCamera(40, W/H, 0.01, 100);
+camera.position.set(5, 4, 7);
+camera.lookAt(0, 1, 0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 1, 0);
+
+// Lights
+const ambient = new THREE.AmbientLight(0xffffff, 2.2);
+scene.add(ambient);
+const sun = new THREE.DirectionalLight(0xfff5e0, 3.5);
+sun.position.set(5, 8, 5);
+sun.castShadow = true;
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0xffffff, 1.8);
+fill.position.set(-3, 2, -3);
+scene.add(fill);
+const back = new THREE.DirectionalLight(0xffffff, 1.0);
+back.position.set(0, -2, -5);
+scene.add(back);
+
+// Textures
+const grassTex = canvasToTexture(makeGrassTexture(512), 4);
+const topsoilTex = canvasToTexture(makeTopsoilTexture(512), 3);
+const subsoilTex = canvasToTexture(makeSubsoilTexture(512), 3);
+const parentrockTex = canvasToTexture(makeParentRockTexture(512), 3);
+const bedrockTex = canvasToTexture(makeBedrockTexture(512), 3);
+
+// Build soil block — each layer is a box
+const BLOCK_W = 3.0, BLOCK_D = 2.0;
+const totalH = LAYERS.reduce((s,l)=>s+l.height, 0);
+
+// sideMaterials index matches LAYERS index 1-3 (0 = topsoil handled separately as grass top)
+const sideMaterials = [
+  subsoilTex,     // LAYERS[1] = SUBSOIL B
+  parentrockTex,  // LAYERS[2] = PARENT ROCK C
+  bedrockTex,     // LAYERS[3] = BEDROCK R
+];
+
+let yOffset = totalH / 2;
+
+const blockGroup = new THREE.Group();
+
+LAYERS.forEach((layer, i) => {
+  if(i === 0) return; // grass top handled separately
+
+  const mat = new THREE.MeshLambertMaterial({
+    map: sideMaterials[i-1],
+    color: 0xffffff
+  });
+
+  const geo = new THREE.BoxGeometry(BLOCK_W, layer.height, BLOCK_D);
+  const mesh = new THREE.Mesh(geo, mat);
+  const layerY = yOffset - layer.height / 2;
+  mesh.position.y = layerY - LAYERS[0].height;
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  mesh.userData.layerIndex = i;
+  blockGroup.add(mesh);
+  yOffset -= layer.height;
+});
+
+// Topsoil layer (index 0)
+const topMat = [
+  new THREE.MeshLambertMaterial({ map: topsoilTex, color: 0xffffff }),
+  new THREE.MeshLambertMaterial({ map: topsoilTex, color: 0xffffff }),
+  new THREE.MeshLambertMaterial({ map: grassTex, color: 0xffffff }),
+  new THREE.MeshLambertMaterial({ map: topsoilTex, color: 0xffffff }),
+  new THREE.MeshLambertMaterial({ map: topsoilTex, color: 0xffffff }),
+  new THREE.MeshLambertMaterial({ map: topsoilTex, color: 0xffffff }),
+];
+const topGeo = new THREE.BoxGeometry(BLOCK_W, LAYERS[0].height, BLOCK_D);
+const topMesh = new THREE.Mesh(topGeo, topMat);
+topMesh.position.y = (totalH/2) - LAYERS[0].height/2 - LAYERS[0].height;
+topMesh.userData.layerIndex = 0;
+blockGroup.add(topMesh);
+
+// Adjust so top of block is at y=0
+blockGroup.position.y = LAYERS[0].height + 0.3;
+scene.add(blockGroup);
+
+// ===== GRASS BLADES (instanced) =====
+const BLADE_COUNT = 150;
+const bladeGeo = new THREE.PlaneGeometry(0.04, 0.18);
+const bladeMat = new THREE.MeshLambertMaterial({
+  color: 0x4a9020,
+  side: THREE.DoubleSide,
+  transparent: true,
+  alphaTest: 0.1
+});
+
+const bladeInstanced = new THREE.InstancedMesh(bladeGeo, bladeMat, BLADE_COUNT);
+bladeInstanced.castShadow = false;
+
+const dummy = new THREE.Object3D();
+const bladeData = [];
+for(let i=0;i<BLADE_COUNT;i++) {
+  const x = (Math.random()-0.5)*BLOCK_W*0.95;
+  const z = (Math.random()-0.5)*BLOCK_D*0.95;
+  const rotY = Math.random()*Math.PI*2;
+  const h = 0.12 + Math.random()*0.1;
+  const phase = Math.random()*Math.PI*2;
+  bladeData.push({x, z, rotY, h, phase});
+  dummy.position.set(x, blockGroup.position.y + LAYERS[0].height/2 + h/2, z);
+  dummy.rotation.set(0, rotY, 0);
+  dummy.scale.set(1, h/0.18, 1);
+  dummy.updateMatrix();
+  bladeInstanced.setMatrixAt(i, dummy.matrix);
+}
+bladeInstanced.instanceMatrix.needsUpdate = true;
+scene.add(bladeInstanced);
+
+// ===== FLOATING TEXTURE SWATCHES =====
+const SWATCH_LABELS = [
+  { text: 'GRASS / HUMUS', color: 0x3a7020, tex: grassTex,       side: 'left',  yOff: 1.5 },
+  { text: 'TOPSOIL A',     color: 0x6b3d18, tex: topsoilTex,     side: 'right', yOff: 1.1 },
+  { text: 'SUBSOIL B',     color: 0xa84c18, tex: subsoilTex,     side: 'left',  yOff: 0.3 },
+  { text: 'PARENT ROCK C', color: 0xa08860, tex: parentrockTex,  side: 'right', yOff: -0.6 },
+  { text: 'BEDROCK R',     color: 0x2e3d55, tex: bedrockTex,     side: 'left',  yOff: -1.2 },
+];
+
+const swatchGroup = new THREE.Group();
+SWATCH_LABELS.forEach((s, i) => {
+  const sGeo = new THREE.BoxGeometry(0.5, 0.3, 0.08);
+  const sMat = new THREE.MeshLambertMaterial({ map: s.tex, color: s.color });
+  const sMesh = new THREE.Mesh(sGeo, sMat);
+  const xPos = s.side === 'left' ? -2.5 : 2.5;
+  sMesh.position.set(xPos, blockGroup.position.y - 0.5 + s.yOff, 0);
+  swatchGroup.add(sMesh);
+
+  // Line connecting swatch to block
+  const lineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(xPos + (s.side==='left'?0.25:-0.25), blockGroup.position.y - 0.5 + s.yOff, 0),
+    new THREE.Vector3(s.side==='left' ? -BLOCK_W/2 : BLOCK_W/2, blockGroup.position.y - 0.5 + s.yOff, 0)
+  ]);
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x39d0f0, transparent: true, opacity: 0.5 });
+  swatchGroup.add(new THREE.Line(lineGeo, lineMat));
+
+  // Label sprite
+  const labelCanvas = document.createElement('canvas');
+  labelCanvas.width=256; labelCanvas.height=64;
+  const lctx = labelCanvas.getContext('2d');
+  lctx.fillStyle='rgba(8,16,26,0.85)';
+  lctx.fillRect(0,0,256,64);
+  lctx.strokeStyle='#39d0f0';
+  lctx.lineWidth=1;
+  lctx.strokeRect(1,1,254,62);
+  lctx.fillStyle='#39d0f0';
+  lctx.font='bold 16px Courier New';
+  lctx.textAlign='center';
+  lctx.textBaseline='middle';
+  lctx.fillText(s.text, 128, 32);
+  const labelTex = new THREE.CanvasTexture(labelCanvas);
+  const labelMat = new THREE.SpriteMaterial({ map: labelTex, transparent: true });
+  const sprite = new THREE.Sprite(labelMat);
+  sprite.scale.set(0.8, 0.2, 1);
+  sprite.position.set(xPos, blockGroup.position.y - 0.5 + s.yOff + 0.22, 0);
+  swatchGroup.add(sprite);
+});
+scene.add(swatchGroup);
+
+// ===== CANVAS 2D — DRILL CORE + RAIN SIMULATION =====
+const coreCanvas = document.getElementById('core-canvas');
+const rPanel = document.getElementById('right-panel');
+
+function resizeCore() {
+  coreCanvas.width = rPanel.clientWidth;
+  coreCanvas.height = rPanel.clientHeight;
+}
+resizeCore();
+
+const ctx2 = coreCanvas.getContext('2d');
+
+// ===== LAYER DRAWING TEXTURES (canvas 2d) =====
+function draw2DTexture(ctx, x, y, w, h, layerIdx) {
+  const layer = LAYERS[layerIdx];
+  const colors = ['#6b3d18','#a84c18','#a08860','#2e3d55'];
+  ctx.fillStyle = colors[layerIdx] || '#555';
+  ctx.fillRect(x, y, w, h);
+
+  ctx.save();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+
+  if(layerIdx === 0) {
+    // topsoil grain
+    for(let i=0;i<120;i++) {
+      const px=x+Math.random()*w, py=y+Math.random()*h;
+      const v=Math.floor(Math.random()*40);
+      ctx.fillStyle=`rgb(${30+v},${15+v},5)`;
+      ctx.beginPath(); ctx.arc(px,py,Math.random()*2+0.5,0,Math.PI*2); ctx.fill();
+    }
+    // roots
+    ctx.strokeStyle='rgba(100,60,20,0.3)';
+    ctx.lineWidth=0.5;
+    for(let i=0;i<15;i++) {
+      const px=x+Math.random()*w, py=y+Math.random()*h;
+      ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(px+Math.random()*15-7,py+Math.random()*15-7); ctx.stroke();
+    }
+  } else if(layerIdx === 1) {
+    for(let i=0;i<80;i++) {
+      const px=x+Math.random()*w, py=y+Math.random()*h;
+      const v=Math.floor(Math.random()*60);
+      ctx.fillStyle=`rgb(${100+v},${40+v>>1},8)`;
+      ctx.beginPath(); ctx.arc(px,py,Math.random()*2+1,0,Math.PI*2); ctx.fill();
+    }
+    // iron nodules
+    for(let i=0;i<12;i++) {
+      const px=x+Math.random()*w, py=y+Math.random()*h;
+      ctx.fillStyle='#c05010';
+      ctx.beginPath(); ctx.arc(px,py,Math.random()*4+2,0,Math.PI*2); ctx.fill();
+    }
+  } else if(layerIdx === 2) {
+    for(let i=0;i<60;i++) {
+      const px=x+Math.random()*w, py=y+Math.random()*h;
+      const v=Math.floor(Math.random()*50);
+      ctx.fillStyle=`rgb(${120+v},${105+v},${75})`;
+      ctx.beginPath(); ctx.arc(px,py,Math.random()*3+1,0,Math.PI*2); ctx.fill();
+    }
+    // gravel
+    for(let i=0;i<8;i++) {
+      const px=x+Math.random()*w, py=y+Math.random()*h;
+      ctx.fillStyle='rgba(90,80,60,0.7)';
+      ctx.beginPath();
+      const pts=5; const size=Math.random()*6+3;
+      for(let j=0;j<pts;j++) {
+        const a=j/pts*Math.PI*2+Math.random()*0.4;
+        if(j===0) ctx.moveTo(px+Math.cos(a)*size,py+Math.sin(a)*size);
+        else ctx.lineTo(px+Math.cos(a)*size,py+Math.sin(a)*size);
+      }
+      ctx.closePath(); ctx.fill();
+    }
+  } else {
+    // bedrock
+    for(let i=0;i<8;i++) {
+      const px=x+Math.random()*w, py=y+Math.random()*h;
+      const v=Math.floor(Math.random()*30);
+      ctx.fillStyle=`rgb(${30+v},${38+v},${55+v})`;
+      ctx.beginPath();
+      const pts=6; const size=Math.random()*12+6;
+      for(let j=0;j<pts;j++) {
+        const a=j/pts*Math.PI*2+Math.random()*0.4;
+        if(j===0) ctx.moveTo(px+Math.cos(a)*size,py+Math.sin(a)*size);
+        else ctx.lineTo(px+Math.cos(a)*size,py+Math.sin(a)*size);
+      }
+      ctx.closePath(); ctx.fill();
+    }
+    // cracks
+    ctx.strokeStyle='rgba(8,12,20,0.8)'; ctx.lineWidth=1;
+    for(let i=0;i<5;i++) {
+      ctx.beginPath();
+      const px=x+Math.random()*w, py=y+Math.random()*h;
+      ctx.moveTo(px,py);
+      ctx.lineTo(px+Math.random()*30-15,py+Math.random()*20-10);
+      ctx.stroke();
+    }
+  }
+
+  // Pore circles
+  ctx.fillStyle='rgba(57,208,240,0.15)';
+  const poreCount = Math.floor(layer.porosity / 5);
+  for(let i=0;i<poreCount;i++) {
+    ctx.beginPath();
+    ctx.arc(x+Math.random()*w, y+Math.random()*h, 1.5,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// Pre-render static textures
+let coreTextures = null;
+function buildCoreTextures() {
+  coreTextures = LAYERS.map((layer, i) => {
+    const oc = document.createElement('canvas');
+    oc.width = 200; oc.height = 200;
+    const oc2 = oc.getContext('2d');
+    draw2DTexture(oc2, 0, 0, 200, 200, i);
+    return oc;
+  });
+}
+buildCoreTextures();
+
+// ===== RAIN SIMULATION STATE =====
+let rainOn = true;
+let rainIntensity = 5;
+
+const rainDrops = [];   // falling rain
+const waterParticles = []; // water in soil
+
+// Core layout geometry (computed each frame from canvas size)
+function getCoreLayout() {
+  const cw = coreCanvas.width, ch = coreCanvas.height;
+  const coreW = Math.floor(cw * 0.38);      // 38% of panel width
+  const coreX = Math.floor(cw * 0.28);      // centred: 28% left margin, 34% right margin for labels
+  const coreTop = 70;
+  const coreBottom = ch - 20;
+  const coreH = coreBottom - coreTop;
+  const totalUnits = LAYERS.reduce((s,l)=>s+l.height,0);
+  return { cw, ch, coreW, coreX, coreTop, coreH, totalUnits, coreBottom };
+}
+
+function layerBounds(i) {
+  const { coreTop, coreH, totalUnits } = getCoreLayout();
+  let y = coreTop;
+  for(let j=0;j<i;j++) y += LAYERS[j].height / totalUnits * coreH;
+  const h = LAYERS[i].height / totalUnits * coreH;
+  return { y, h };
+}
+
+// Spawn rain drops — only within core column width
+function spawnRain() {
+  const { coreX, coreW } = getCoreLayout();
+  const count = rainIntensity;
+  for(let i=0;i<count;i++) {
+    if(Math.random() > 0.5) continue;
+    rainDrops.push({
+      x: coreX + Math.random() * coreW,
+      y: 0,
+      vy: 3 + Math.random()*3,
+      len: 8 + Math.random()*8
+    });
+  }
+}
+
+// Spawn water particle entering soil
+function spawnWaterParticle(x) {
+  waterParticles.push({
+    x: x,
+    y: layerBounds(0).y,
+    layerIdx: 0,
+    phase: 'falling',
+    poolX: x,
+    poolTimer: 0,
+    alpha: 0.7 + Math.random()*0.3,
+    vx: (Math.random()-0.5)*0.4
+  });
+}
+
+function updateRain() {
+  const { coreX, coreW, coreTop } = getCoreLayout();
+
+  // Update rain drops
+  for(let i=rainDrops.length-1;i>=0;i--) {
+    const d = rainDrops[i];
+    d.y += d.vy;
+    if(d.y > coreTop + 10) {
+      // Hit surface
+      if(d.x > coreX - 5 && d.x < coreX + coreW + 5) {
+        spawnWaterParticle(d.x);
+      }
+      rainDrops.splice(i, 1);
+    }
+  }
+
+  // Update water particles
+  for(let i=waterParticles.length-1;i>=0;i--) {
+    const p = waterParticles[i];
+    const layer = LAYERS[p.layerIdx];
+    const bounds = layerBounds(p.layerIdx);
+    const layerBottom = bounds.y + bounds.h;
+
+    if(layer.speed === 0) {
+      // Impermeable — pool and spread
+      p.phase = 'pooling';
+      p.vx = (Math.random()-0.5)*1.5;
+      p.x += p.vx;
+      p.poolTimer++;
+      if(p.poolTimer > 120) { waterParticles.splice(i,1); }
+      continue;
+    }
+
+    if(layer.poolable && layer.speed < 1.2) {
+      // Slow layer — sometimes pool briefly
+      if(Math.random() < 0.003) {
+        p.phase = 'pooling';
+        p.poolTimer = 0;
+      }
+    }
+
+    if(p.phase === 'pooling') {
+      p.vx = (Math.random()-0.5)*0.8;
+      p.x += p.vx;
+      p.poolTimer++;
+      if(p.poolTimer > 40) { p.phase = 'falling'; }
+      continue;
+    }
+
+    // Move down at layer speed
+    p.y += layer.speed * 0.25;
+    p.x += p.vx * 0.1;
+
+    if(p.y >= layerBottom) {
+      if(p.layerIdx < LAYERS.length - 1) {
+        p.layerIdx++;
+        p.y = layerBounds(p.layerIdx).y;
+      } else {
+        waterParticles.splice(i,1);
+      }
+    }
+
+    // Clamp within core width
+    p.x = Math.max(coreX, Math.min(coreX + coreW, p.x));
+  }
+
+  // Cull excess
+  if(waterParticles.length > 400) waterParticles.splice(0, 100);
+  if(rainDrops.length > 200) rainDrops.splice(0, 50);
+}
+
+// ===== DRAW CORE PANEL =====
+function drawCore() {
+  const { cw, ch, coreW, coreX, coreTop, coreH, totalUnits, coreBottom } = getCoreLayout();
+  const rulerX = coreX - 30;
+  const labelX = coreX + coreW + 12;
+
+  ctx2.clearRect(0,0,cw,ch);
+  ctx2.fillStyle='#08101a';
+  ctx2.fillRect(0,0,cw,ch);
+
+  // Title
+  ctx2.fillStyle='#39d0f0';
+  ctx2.font='bold 11px Courier New';
+  ctx2.textAlign='center';
+  ctx2.fillText('DRILL CORE — VERTICAL SECTION', cw/2, 18);
+
+  // Rain zone label above core
+  ctx2.fillStyle='rgba(100,200,255,0.5)';
+  ctx2.font='9px Courier New';
+  ctx2.textAlign='center';
+  ctx2.fillText('▼ RAIN ▼', coreX + coreW/2, coreTop - 10);
+
+  // Surface line
+  ctx2.strokeStyle='rgba(57,208,240,0.6)';
+  ctx2.lineWidth=1.5;
+  ctx2.beginPath();
+  ctx2.moveTo(coreX - 5, coreTop);
+  ctx2.lineTo(coreX + coreW + 5, coreTop);
+  ctx2.stroke();
+
+  // Depth ruler vertical line
+  ctx2.strokeStyle='rgba(57,208,240,0.35)';
+  ctx2.lineWidth=1;
+  ctx2.beginPath();
+  ctx2.moveTo(rulerX + 18, coreTop);
+  ctx2.lineTo(rulerX + 18, coreBottom);
+  ctx2.stroke();
+
+  // Draw layer bands
+  LAYERS.forEach((layer, i) => {
+    const { y, h } = layerBounds(i);
+
+    // Texture fill
+    if(coreTextures && coreTextures[i]) {
+      const pat = ctx2.createPattern(coreTextures[i], 'repeat');
+      ctx2.fillStyle = pat;
+      ctx2.fillRect(coreX, y, coreW, h);
+    }
+
+    // Layer border
+    ctx2.strokeStyle = i === LAYERS.length-1 ? 'rgba(57,208,240,0.8)' : 'rgba(57,208,240,0.4)';
+    ctx2.lineWidth = i === LAYERS.length-1 ? 2 : 1;
+    ctx2.strokeRect(coreX, y, coreW, h);
+
+    // Depth tick on ruler
+    ctx2.strokeStyle='rgba(57,208,240,0.5)';
+    ctx2.lineWidth=1;
+    ctx2.beginPath();
+    ctx2.moveTo(rulerX + 14, y);
+    ctx2.lineTo(rulerX + 22, y);
+    ctx2.stroke();
+
+    // Depth label on left
+    ctx2.fillStyle='#8b949e';
+    ctx2.font='9px Courier New';
+    ctx2.textAlign='right';
+    const depthLabel = layer.depth.split('–')[0].replace('cm','').trim() + 'cm';
+    ctx2.fillText(depthLabel, rulerX + 12, y + 4);
+
+    // Right-side label panel — only if band is tall enough
+    if(h > 28) {
+      const midY = y + h/2;
+
+      // Connector line from right edge to label
+      ctx2.strokeStyle='rgba(57,208,240,0.3)';
+      ctx2.lineWidth=0.8;
+      ctx2.setLineDash([3,3]);
+      ctx2.beginPath();
+      ctx2.moveTo(coreX + coreW, midY);
+      ctx2.lineTo(labelX + 2, midY);
+      ctx2.stroke();
+      ctx2.setLineDash([]);
+
+      ctx2.fillStyle='#39d0f0';
+      ctx2.font='bold 10px Courier New';
+      ctx2.textAlign='left';
+      ctx2.fillText(layer.label, labelX + 6, midY - 14);
+
+      ctx2.fillStyle='#7a8894';
+      ctx2.font='9px Courier New';
+      ctx2.fillText(layer.depth, labelX + 6, midY - 3);
+      ctx2.fillText(`Por: ${layer.porosity}%  Clay: ${layer.clay}%`, labelX + 6, midY + 8);
+      ctx2.fillText(`Infil: ${layer.infiltration}`, labelX + 6, midY + 19);
+    }
+  });
+
+  // Bottom depth label
+  const lastLayer = LAYERS[LAYERS.length-1];
+  ctx2.fillStyle='#8b949e';
+  ctx2.font='9px Courier New';
+  ctx2.textAlign='right';
+  ctx2.fillText('150cm+', rulerX + 12, coreBottom + 4);
+
+  // Rain drops (above core surface)
+  ctx2.strokeStyle='rgba(120,210,255,0.75)';
+  ctx2.lineWidth=1.5;
+  rainDrops.forEach(d => {
+    if(d.y < coreTop) {
+      ctx2.beginPath();
+      ctx2.moveTo(d.x, d.y - d.len);
+      ctx2.lineTo(d.x, d.y);
+      ctx2.stroke();
+    }
+  });
+
+  // Water particles inside core
+  waterParticles.forEach(p => {
+    const alpha = p.alpha * (p.phase==='pooling' ? 0.55 : 0.9);
+    ctx2.fillStyle=`rgba(57,170,240,${alpha})`;
+    ctx2.beginPath();
+    ctx2.arc(p.x, p.y, p.phase==='pooling' ? 3.5 : 2, 0, Math.PI*2);
+    ctx2.fill();
+  });
+
+  // Pooled water indicator at bedrock (impermeable)
+  const bedrockBounds = layerBounds(3);
+  const poolCount = waterParticles.filter(p=>p.layerIdx===3).length;
+  if(poolCount > 3) {
+    const poolH = Math.min(poolCount*0.6, bedrockBounds.h * 0.5);
+    ctx2.fillStyle='rgba(57,140,220,0.22)';
+    ctx2.fillRect(coreX+2, bedrockBounds.y+2, coreW-4, poolH);
+    ctx2.fillStyle='rgba(57,208,240,0.7)';
+    ctx2.font='bold 8px Courier New';
+    ctx2.textAlign='center';
+    ctx2.fillText('⬥ WATER TABLE', coreX+coreW/2, bedrockBounds.y + poolH + 12);
+  }
+}
+
+// ===== ANIMATION =====
+let t = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  t += 0.016;
+
+  controls.update();
+
+  // Sway grass blades
+  for(let i=0;i<BLADE_COUNT;i++) {
+    const bd = bladeData[i];
+    const sway = Math.sin(t*1.5 + bd.phase) * 0.08;
+    dummy.position.set(bd.x, blockGroup.position.y + LAYERS[0].height/2 + bd.h/2, bd.z);
+    dummy.rotation.set(sway, bd.rotY, 0);
+    dummy.scale.set(1, bd.h/0.18, 1);
+    dummy.updateMatrix();
+    bladeInstanced.setMatrixAt(i, dummy.matrix);
+  }
+  bladeInstanced.instanceMatrix.needsUpdate = true;
+
+  // Rain simulation
+  if(rainOn) spawnRain();
+  updateRain();
+  drawCore();
+
+  renderer.render(scene, camera);
+}
+animate();
+
+// ===== RESIZE =====
+window.addEventListener('resize', () => {
+  const W = container.clientWidth, H = container.clientHeight;
+  renderer.setSize(W, H);
+  camera.aspect = W/H;
+  camera.updateProjectionMatrix();
+  resizeCore();
+  buildCoreTextures();
+});
+
+// ===== CONTROLS =====
+const rainToggle = document.getElementById('rain-toggle');
+rainToggle.addEventListener('click', () => {
+  rainOn = !rainOn;
+  rainToggle.textContent = rainOn ? 'RAIN ON' : 'RAIN OFF';
+  rainToggle.classList.toggle('active', rainOn);
+  if(!rainOn) { rainDrops.length=0; waterParticles.length=0; }
+});
+
+const rainSlider = document.getElementById('rain-intensity');
+const intensityLabel = document.getElementById('intensity-label');
+rainSlider.addEventListener('input', () => {
+  rainIntensity = parseInt(rainSlider.value);
+  intensityLabel.textContent = rainIntensity;
+});
+
+// ===== LAYER SELECTION (click on 3D block) =====
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const statFields = {
+  layer: document.getElementById('stat-layer'),
+  depth: document.getElementById('stat-depth'),
+  clay: document.getElementById('stat-clay'),
+  porosity: document.getElementById('stat-porosity'),
+  infil: document.getElementById('stat-infil'),
+  wret: document.getElementById('stat-wret')
+};
+
+renderer.domElement.addEventListener('click', (e) => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX - rect.left) / rect.width)*2-1;
+  mouse.y = -((e.clientY - rect.top) / rect.height)*2+1;
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(blockGroup.children);
+  if(hits.length > 0) {
+    const li = hits[0].object.userData.layerIndex;
+    if(li !== undefined) {
+      const layer = LAYERS[li];
+      statFields.layer.textContent = layer.label;
+      statFields.depth.textContent = layer.depth;
+      statFields.clay.textContent = layer.clay+'%';
+      statFields.porosity.textContent = layer.porosity+'%';
+      statFields.infil.textContent = layer.infiltration;
+      statFields.wret.textContent = layer.waterRetention;
+    }
+  }
+});
+
+</script>
+</body>
+</html>

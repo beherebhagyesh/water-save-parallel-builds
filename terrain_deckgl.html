@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Terrain Prototype v2</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0e14; font-family: 'Courier New', monospace; overflow: hidden; }
+    #container { width: 100vw; height: 100vh; }
+    #controls {
+      position: absolute; top: 16px; left: 16px; z-index: 10;
+      background: rgba(10,14,20,0.9); border: 1px solid #1e3a4a;
+      padding: 14px 18px; color: #c9d1d9; font-size: 11px; border-radius: 4px;
+      min-width: 200px;
+    }
+    #controls h3 { color: #39d0f0; margin-bottom: 10px; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; }
+    .ctrl-row { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; gap: 10px; }
+    .ctrl-row label { color: #8b949e; }
+    .ctrl-row span { color: #39d0f0; min-width: 30px; text-align: right; }
+    input[type=range] { width: 100px; accent-color: #39d0f0; }
+    .toggle { display: flex; align-items: center; gap: 6px; margin: 5px 0; cursor: pointer; }
+    .toggle input { accent-color: #39d0f0; }
+    #legend {
+      position: absolute; bottom: 16px; right: 16px; z-index: 10;
+      background: rgba(10,14,20,0.9); border: 1px solid #1e3a4a;
+      padding: 10px 14px; color: #8b949e; font-size: 10px; border-radius: 4px;
+    }
+    #legend h4 { color: #39d0f0; margin-bottom: 6px; font-size: 11px; }
+    .leg-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+    .leg-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .leg-line { width: 20px; height: 2px; }
+    #info { position: absolute; bottom: 16px; left: 16px; z-index: 10;
+      color: #3a5060; font-size: 10px; }
+  </style>
+</head>
+<body>
+<div id="container"></div>
+
+<div id="controls">
+  <h3>▦ Terrain Controls</h3>
+  <div class="ctrl-row"><label>Elevation ×</label><input type="range" id="elevScale" min="1" max="20" step="0.5" value="8"><span id="elevVal">8</span></div>
+  <div class="ctrl-row"><label>Pitch</label><input type="range" id="pitch" min="20" max="80" step="1" value="55"><span id="pitchVal">55°</span></div>
+  <div class="ctrl-row"><label>Bearing</label><input type="range" id="bearing" min="-180" max="180" step="5" value="-20"><span id="bearingVal">-20°</span></div>
+  <hr style="border-color:#1e3a4a;margin:8px 0">
+  <div class="toggle"><input type="checkbox" id="showFlow" checked><label>Water flow paths</label></div>
+  <div class="toggle"><input type="checkbox" id="showPonds" checked><label>Pond candidates</label></div>
+  <div class="toggle"><input type="checkbox" id="showWatershed" checked><label>Watershed boundary</label></div>
+  <div class="toggle"><input type="checkbox" id="showSides" checked><label>Geological sides</label></div>
+</div>
+
+<div id="legend">
+  <h4>LEGEND</h4>
+  <div class="leg-row"><div class="leg-dot" style="background:#00c8ff;border:2px solid white"></div><span>High priority pond</span></div>
+  <div class="leg-row"><div class="leg-dot" style="background:#0070c0;border:2px solid white"></div><span>Medium priority pond</span></div>
+  <div class="leg-row"><div class="leg-line" style="background:linear-gradient(90deg,#00c8ff,#0040a0)"></div><span>Flow accumulation</span></div>
+  <div class="leg-row"><div class="leg-line" style="background:#00ff88;opacity:0.7"></div><span>Watershed boundary</span></div>
+  <hr style="border-color:#1e3a4a;margin:5px 0">
+  <div class="leg-row" style="color:#4a6070">▪ Topsoil (0–30cm)</div>
+  <div class="leg-row" style="color:#7a4020">▪ Subsoil (30–80cm)</div>
+  <div class="leg-row" style="color:#c08040">▪ Parent material</div>
+  <div class="leg-row" style="color:#505050">▪ Basalt bedrock</div>
+</div>
+
+<div id="info">Nandurbar, Maharashtra · 21.37°N 74.24°E · SRTM 30m · ESRI Imagery</div>
+
+<script src="https://unpkg.com/deck.gl@latest/dist.min.js"></script>
+<script>
+const {DeckGL, TerrainLayer, PathLayer, ScatterplotLayer, PolygonLayer, SolidPolygonLayer, TextLayer} = deck;
+
+const BOUNDS = [74.18, 21.33, 74.30, 21.42];
+const [W, S, E, N] = BOUNDS;
+const CX = (W+E)/2, CY = (S+N)/2;
+
+// Geological side wall strata
+// Each wall: array of [polygon, color] representing depth bands
+const STRATA_COLORS = [
+  [60, 40, 25],    // dark topsoil
+  [120, 64, 32],   // subsoil red
+  [192, 128, 64],  // parent material sandy
+  [80, 70, 65],    // weathered basalt
+  [50, 45, 42],    // basalt bedrock
+];
+const STRATUM_DEPTHS = [-20, -60, -120, -200, -320]; // meters below surface
+
+function buildSideWalls() {
+  const walls = [];
+  const baseElev = -350; // floor of the block
+
+  // Build 4 walls: south, north, west, east
+  const edges = [
+    // south wall: W,S → E,S
+    { pts: [[W,S],[E,S]], normal: 'S' },
+    // north wall: E,N → W,N
+    { pts: [[E,N],[W,N]], normal: 'N' },
+    // west wall: W,N → W,S
+    { pts: [[W,N],[W,S]], normal: 'W' },
+    // east wall: E,S → E,N
+    { pts: [[E,S],[E,N]], normal: 'E' },
+  ];
+
+  for (const edge of edges) {
+    const [p1, p2] = edge.pts;
+    const topElev = 0;
+    // Each stratum band
+    for (let i = 0; i < STRATUM_DEPTHS.length; i++) {
+      const top = i === 0 ? topElev : STRATUM_DEPTHS[i-1];
+      const bot = STRATUM_DEPTHS[i];
+      walls.push({
+        polygon: [
+          [p1[0], p1[1], top],
+          [p2[0], p2[1], top],
+          [p2[0], p2[1], bot],
+          [p1[0], p1[1], bot],
+        ],
+        color: STRATA_COLORS[i],
+      });
+    }
+    // Floor cap
+    walls.push({
+      polygon: [
+        [p1[0], p1[1], STRATUM_DEPTHS[STRATUM_DEPTHS.length-1]],
+        [p2[0], p2[1], STRATUM_DEPTHS[STRATUM_DEPTHS.length-1]],
+        [p2[0], p2[1], baseElev],
+        [p1[0], p1[1], baseElev],
+      ],
+      color: [35, 30, 28],
+    });
+  }
+
+  // Bottom face
+  walls.push({
+    polygon: [
+      [W, S, baseElev], [E, S, baseElev],
+      [E, N, baseElev], [W, N, baseElev],
+    ],
+    color: [30, 25, 23],
+  });
+
+  return walls;
+}
+
+// Flow paths — main drainage channels
+const FLOW_PATHS = [
+  { path: [[74.263, 21.400, 50], [74.255, 21.390, 40], [74.248, 21.380, 30], [74.241, 21.372, 20], [74.238, 21.362, 10]], w: 1.0 },
+  { path: [[74.225, 21.388, 45], [74.230, 21.380, 35], [74.236, 21.374, 25], [74.238, 21.372, 20]], w: 0.7 },
+  { path: [[74.268, 21.370, 40], [74.258, 21.368, 30], [74.248, 21.368, 20]], w: 0.55 },
+  { path: [[74.232, 21.395, 50], [74.235, 21.385, 40], [74.237, 21.378, 30], [74.238, 21.372, 20]], w: 0.45 },
+  { path: [[74.245, 21.345, 35], [74.242, 21.355, 25], [74.240, 21.362, 15]], w: 0.35 },
+];
+
+// Watershed polygon
+const WATERSHED = [[
+  [74.215, 21.342], [74.270, 21.345], [74.280, 21.375],
+  [74.268, 21.408], [74.235, 21.412], [74.198, 21.395],
+  [74.195, 21.360], [74.215, 21.342]
+]];
+
+// Pond candidates
+const PONDS = [
+  { position: [74.238, 21.372, 30], storage: 1863, class: 'High', name: 'Site A' },
+  { position: [74.245, 21.368, 25], storage: 1294, class: 'Medium', name: 'Site B' },
+];
+
+// Pond ring halos (concentric)
+const POND_RINGS = [];
+for (const p of PONDS) {
+  const r = Math.cbrt(p.storage / 80) * 0.0005;
+  for (let i = 1; i <= 3; i++) {
+    const pts = [];
+    for (let a = 0; a <= 360; a += 10) {
+      pts.push([
+        p.position[0] + Math.cos(a * Math.PI/180) * r * i,
+        p.position[1] + Math.sin(a * Math.PI/180) * r * i * 0.7,
+        p.position[2] + 5,
+      ]);
+    }
+    POND_RINGS.push({ path: pts, alpha: 180 - i * 50, isHigh: p.class === 'High' });
+  }
+}
+
+let state = {
+  elevationMultiplier: 8,
+  pitch: 55,
+  bearing: -20,
+  showFlow: true,
+  showPonds: true,
+  showWatershed: true,
+  showSides: true,
+};
+
+const deckgl = new DeckGL({
+  container: 'container',
+  initialViewState: {
+    longitude: CX,
+    latitude: CY,
+    zoom: 12.2,
+    pitch: state.pitch,
+    bearing: state.bearing,
+    minZoom: 9,
+    maxZoom: 16,
+  },
+  controller: { scrollZoom: true, dragRotate: true, dragPan: true },
+  layers: buildLayers(),
+  getTooltip: ({object, layer}) => {
+    if (!object) return null;
+    if (layer && layer.id === 'ponds' && object.name) {
+      return {
+        html: `<b>${object.name} — ${object.class} Priority</b><br>Storage: ${object.storage.toLocaleString()} m³<br>Est. fill: ${object.class === 'High' ? 82 : 64}%`,
+        style: { background: '#0a0e14', color: '#c9d1d9', border: '1px solid #1e3a4a', fontSize: '12px', padding: '8px' }
+      };
+    }
+    return null;
+  },
+});
+
+function buildLayers() {
+  const layers = [];
+
+  // Geological side walls
+  if (state.showSides) {
+    const walls = buildSideWalls();
+    layers.push(new SolidPolygonLayer({
+      id: 'walls',
+      data: walls,
+      getPolygon: d => d.polygon,
+      getFillColor: d => [...d.color, 255],
+      extruded: false,
+      wireframe: false,
+    }));
+
+    // Stratum edge lines for definition
+    layers.push(new PathLayer({
+      id: 'strata-lines',
+      data: STRATUM_DEPTHS.slice(0, -1).flatMap(depth => [
+        { path: [[W,S,depth],[E,S,depth]], },
+        { path: [[E,N,depth],[W,N,depth]], },
+        { path: [[W,N,depth],[W,S,depth]], },
+        { path: [[E,S,depth],[E,N,depth]], },
+      ]),
+      getPath: d => d.path,
+      getColor: [0, 0, 0, 80],
+      getWidth: 1,
+      widthMinPixels: 1,
+    }));
+  }
+
+  // Terrain with satellite texture
+  layers.push(new TerrainLayer({
+    id: 'terrain',
+    elevationData: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+    texture: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    elevationDecoder: { rScaler: 256, gScaler: 1, bScaler: 1/256, offset: -32768 },
+    bounds: BOUNDS,
+    meshMaxError: 1,
+    elevationMultiplier: state.elevationMultiplier,
+    minZoom: 0,
+    maxZoom: 14,
+    workerUrl: null,
+  }));
+
+  // Watershed boundary
+  if (state.showWatershed) {
+    layers.push(new PolygonLayer({
+      id: 'watershed-fill',
+      data: WATERSHED,
+      getPolygon: d => d,
+      getFillColor: [0, 255, 100, 12],
+      getLineColor: [0, 255, 120, 0],
+      filled: true, stroked: false,
+    }));
+    layers.push(new PathLayer({
+      id: 'watershed-line',
+      data: [{ path: [...WATERSHED[0], WATERSHED[0][0]] }],
+      getPath: d => d.path,
+      getColor: [0, 220, 100, 200],
+      getWidth: 3,
+      widthMinPixels: 2,
+      getDashArray: [8, 4],
+      dashJustified: true,
+    }));
+  }
+
+  // Flow paths — colored by flow magnitude
+  if (state.showFlow) {
+    layers.push(new PathLayer({
+      id: 'flow',
+      data: FLOW_PATHS,
+      getPath: d => d.path,
+      getColor: d => [
+        Math.round(0 + (1 - d.w) * 30),
+        Math.round(140 + d.w * 100),
+        255,
+        Math.round(160 + d.w * 80),
+      ],
+      getWidth: d => d.w * 5 + 1.5,
+      widthMinPixels: 2,
+      widthMaxPixels: 8,
+      capRounded: true,
+      jointRounded: true,
+    }));
+  }
+
+  // Pond halo rings
+  if (state.showPonds) {
+    layers.push(new PathLayer({
+      id: 'pond-rings',
+      data: POND_RINGS,
+      getPath: d => d.path,
+      getColor: d => d.isHigh ? [0, 200, 255, d.alpha] : [0, 120, 220, d.alpha],
+      getWidth: 1.5,
+      widthMinPixels: 1,
+    }));
+
+    // Pond center fills
+    layers.push(new ScatterplotLayer({
+      id: 'ponds',
+      data: PONDS,
+      getPosition: d => d.position,
+      getRadius: d => Math.cbrt(d.storage / 80) * 28,
+      getFillColor: d => d.class === 'High' ? [0, 180, 255, 200] : [0, 100, 200, 180],
+      getLineColor: [200, 240, 255, 220],
+      lineWidthMinPixels: 2,
+      stroked: true,
+      radiusUnits: 'meters',
+      radiusMinPixels: 8,
+      pickable: true,
+    }));
+
+    // Labels
+    layers.push(new TextLayer({
+      id: 'pond-labels',
+      data: PONDS,
+      getPosition: d => [d.position[0], d.position[1] + 0.003, d.position[2] + 80],
+      getText: d => `${d.name}\n${(d.storage/1000).toFixed(1)}k m³`,
+      getSize: 13,
+      getColor: [220, 240, 255, 240],
+      getBackgroundColor: [10, 20, 35, 200],
+      background: true,
+      backgroundPadding: [4, 2, 4, 2],
+      getTextAnchor: 'middle',
+      getAlignmentBaseline: 'center',
+      fontFamily: 'Courier New',
+    }));
+  }
+
+  return layers;
+}
+
+function refresh() {
+  deckgl.setProps({
+    layers: buildLayers(),
+    initialViewState: {
+      longitude: CX, latitude: CY, zoom: 12.2,
+      pitch: state.pitch, bearing: state.bearing,
+      transitionDuration: 400,
+    }
+  });
+}
+
+// Controls
+document.getElementById('elevScale').addEventListener('input', e => {
+  state.elevationMultiplier = parseFloat(e.target.value);
+  document.getElementById('elevVal').textContent = state.elevationMultiplier;
+  refresh();
+});
+document.getElementById('pitch').addEventListener('input', e => {
+  state.pitch = parseInt(e.target.value);
+  document.getElementById('pitchVal').textContent = state.pitch + '°';
+  refresh();
+});
+document.getElementById('bearing').addEventListener('input', e => {
+  state.bearing = parseInt(e.target.value);
+  document.getElementById('bearingVal').textContent = state.bearing + '°';
+  refresh();
+});
+['showFlow','showPonds','showWatershed','showSides'].forEach(id => {
+  document.getElementById(id).addEventListener('change', e => {
+    state[id] = e.target.checked;
+    refresh();
+  });
+});
+</script>
+</body>
+</html>

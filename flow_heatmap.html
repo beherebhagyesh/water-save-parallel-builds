@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Flow Velocity Heatmap</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#08101a; font-family:'Courier New',monospace; overflow:hidden; }
+canvas { display:block; }
+#ui {
+  position:absolute; top:16px; right:16px;
+  background:rgba(6,12,20,0.92); border:1px solid #1a3a4a;
+  padding:14px 18px; color:#c9d1d9; font-size:11px; border-radius:4px;
+  min-width:200px; z-index:10;
+}
+#ui h3 { color:#39d0f0; margin-bottom:12px; letter-spacing:2px; font-size:11px; }
+.row { display:flex; justify-content:space-between; align-items:center; margin:5px 0; gap:8px; }
+.row label { color:#8b949e; }
+.row span { color:#39d0f0; min-width:36px; text-align:right; }
+input[type=range] { width:100px; accent-color:#39d0f0; }
+hr { border-color:#1a3a4a; margin:8px 0; }
+.btn-row { display:flex; gap:6px; flex-wrap:wrap; margin:4px 0; }
+.btn {
+  background:rgba(57,208,240,0.08); border:1px solid #1a3a4a;
+  color:#8b949e; font-family:'Courier New',monospace; font-size:10px;
+  padding:4px 10px; cursor:pointer; border-radius:2px; letter-spacing:1px; transition:all 0.15s;
+}
+.btn.active { background:rgba(57,208,240,0.18); border-color:#39d0f0; color:#39d0f0; }
+.btn:hover { border-color:#39d0f0; color:#39d0f0; }
+#title-badge { position:absolute; top:16px; left:16px;
+  background:rgba(6,12,20,0.90); border:1px solid #1a3a4a; padding:8px 14px;
+  border-radius:3px; z-index:10; }
+#title-badge h2 { color:#39d0f0; font-size:13px; letter-spacing:2px; margin-bottom:2px; }
+#title-badge p  { color:#4a7a8a; font-size:10px; letter-spacing:1px; }
+#legend {
+  position:absolute; bottom:40px; left:50%; transform:translateX(-50%);
+  background:rgba(6,12,20,0.90); border:1px solid #1a3a4a; padding:8px 16px;
+  border-radius:3px; z-index:10; text-align:center;
+}
+#legend-label { color:#8b949e; font-size:10px; letter-spacing:1px; margin-bottom:4px; }
+#legend-canvas { display:block; margin:0 auto 4px; }
+#legend-ticks { display:flex; justify-content:space-between; font-size:9px; color:#4a7a8a; width:280px; margin:0 auto; }
+#info { position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+  font-size:9px; color:#3a5a6a; letter-spacing:1px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title-badge">
+  <h2>FLOW VELOCITY HEATMAP</h2>
+  <p>D8 hydrology · synthetic DEM · 256×256</p>
+</div>
+<div id="ui">
+  <h3>▦ LAYERS</h3>
+  <div class="btn-row">
+    <button class="btn active" id="btn-velocity" onclick="setLayer('velocity')">Velocity</button>
+    <button class="btn" id="btn-depth"    onclick="setLayer('depth')">Depth</button>
+    <button class="btn" id="btn-slope"    onclick="setLayer('slope')">Slope</button>
+    <button class="btn" id="btn-composite" onclick="setLayer('composite')">Composite</button>
+  </div>
+  <hr>
+  <div class="row"><label>Rain intensity</label><input type="range" id="rain" min="0" max="100" value="50"><span id="rainv">50</span></div>
+  <div class="row"><label>Streams</label><input type="range" id="streams" min="50" max="500" step="50" value="200"><span id="streamsv">200</span></div>
+  <hr>
+  <div class="btn-row">
+    <button class="btn active" id="btn-anim" onclick="toggleAnim()">▶ Animate</button>
+    <button class="btn" onclick="regenerate()">↺ New terrain</button>
+  </div>
+</div>
+<div id="legend">
+  <div id="legend-label">FLOW VELOCITY — SLOW → FAST</div>
+  <canvas id="legend-canvas" width="280" height="10"></canvas>
+  <div id="legend-ticks">
+    <span>0 m/s</span><span>0.5</span><span>1.0</span><span>1.5</span><span>2.0+</span>
+  </div>
+</div>
+<div id="info">D8 flow routing · use controls to explore</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const G = 256;
+let W, H, cellW, cellH;
+let layer = 'velocity';
+let animating = true;
+let rainIntensity = 0.5;
+let streamCount   = 200;
+let terrainSeed   = 42;
+
+// ── Typed arrays ────────────────────────────────────────────────────────────
+const elevData  = new Float32Array(G * G);
+const accData   = new Float32Array(G * G);
+const velData   = new Float32Array(G * G);
+const slopeData = new Float32Array(G * G);
+const flowDir   = new Int8Array(G * G).fill(-1);
+
+// D8 neighbours: [dr, dc]
+const D8     = [[-1,0],[-1,1],[0,1],[1,1],[1,0],[1,-1],[0,-1],[-1,-1]];
+const D8dist = [1, Math.SQRT2, 1, Math.SQRT2, 1, Math.SQRT2, 1, Math.SQRT2];
+
+// ── Value noise helpers ──────────────────────────────────────────────────────
+function smoothstep(t){ return t*t*(3-2*t); }
+function hash(a, b, seed){
+  let n = ((a*1619 + b*31337 + seed*6971) >>> 0);
+  n = ((n>>>13)^n)>>>0;
+  return ((n*(n*n*15731+789221)+1376312589)>>>0) / 4294967296;
+}
+function valueNoise(x, y, seed){
+  const ix=Math.floor(x), iy=Math.floor(y);
+  const fx=smoothstep(x-ix), fy=smoothstep(y-iy);
+  return (1-fy)*((1-fx)*hash(ix,iy,seed)   + fx*hash(ix+1,iy,seed))
+             + fy*((1-fx)*hash(ix,iy+1,seed) + fx*hash(ix+1,iy+1,seed));
+}
+function fbm(x, y, octaves, seed){
+  let v=0, amp=0.5, freq=1, max=0;
+  for(let i=0;i<octaves;i++){
+    v += valueNoise(x*freq, y*freq, seed+i*997)*amp;
+    max += amp; amp*=0.5; freq*=2.1;
+  }
+  return v/max;
+}
+
+// ── Terrain generation ───────────────────────────────────────────────────────
+function generateTerrain(){
+  // Two crossed ridges + regional slope draining to SW
+  for(let r=0;r<G;r++) for(let c=0;c<G;c++){
+    const nx=c/G, ny=r/G;
+
+    // Ridge 1: diagonal NW→SE
+    const d1 = Math.abs(nx - ny - 0.10) * Math.SQRT2 * 0.5;
+    const ridge1 = Math.max(0, 1 - d1/0.16) * 0.70;
+
+    // Ridge 2: near-vertical, western side
+    const d2 = Math.abs(nx - 0.68);
+    const ridge2 = Math.max(0, 1 - d2/0.12) * 0.50;
+
+    // Regional slope: high NE, low SW
+    const slope = (1-nx)*0.25 + (1-ny)*0.20;
+
+    // Detail noise
+    const detail = fbm(nx*5, ny*5, 5, terrainSeed)*0.22;
+
+    elevData[r*G+c] = Math.max(0, Math.min(1, slope + ridge1 + ridge2 + detail));
+  }
+
+  // Gaussian smooth σ=2 to remove flat-field traps
+  const tmp = new Float32Array(G*G);
+  const kk  = [0.06, 0.24, 0.40, 0.24, 0.06];
+  for(let r=0;r<G;r++) for(let c=0;c<G;c++){
+    let v=0;
+    for(let i=0;i<5;i++){ const cc=Math.min(G-1,Math.max(0,c+i-2)); v+=elevData[r*G+cc]*kk[i]; }
+    tmp[r*G+c]=v;
+  }
+  for(let r=0;r<G;r++) for(let c=0;c<G;c++){
+    let v=0;
+    for(let i=0;i<5;i++){ const rr=Math.min(G-1,Math.max(0,r+i-2)); v+=tmp[rr*G+c]*kk[i]; }
+    elevData[r*G+c]=v;
+  }
+
+  computeHydrology();
+}
+
+// ── D8 hydrology ─────────────────────────────────────────────────────────────
+function computeHydrology(){
+  flowDir.fill(-1);
+  for(let r=1;r<G-1;r++) for(let c=1;c<G-1;c++){
+    const e = elevData[r*G+c];
+    let best=-1, maxDrop=-Infinity;
+    for(let d=0;d<8;d++){
+      const nr=r+D8[d][0], nc=c+D8[d][1];
+      const drop = (e - elevData[nr*G+nc]) / D8dist[d];
+      if(drop>maxDrop){ maxDrop=drop; best=d; }
+    }
+    flowDir[r*G+c] = best;
+    slopeData[r*G+c] = Math.max(0, maxDrop);
+  }
+
+  // Flow accumulation — topological sort high→low
+  accData.fill(1);
+  const order = [];
+  for(let i=0;i<G*G;i++) order.push(i);
+  order.sort((a,b) => elevData[b] - elevData[a]);
+  for(const i of order){
+    if(flowDir[i]<0) continue;
+    const r=Math.floor(i/G), c=i%G;
+    const [dr,dc] = D8[flowDir[i]];
+    const ni = (r+dr)*G+(c+dc);
+    if(ni>=0 && ni<G*G) accData[ni] += accData[i];
+  }
+
+  // Velocity = slope × log(acc) — fast on steep channels
+  let maxAcc=1;
+  for(let i=0;i<G*G;i++) if(accData[i]>maxAcc) maxAcc=accData[i];
+  for(let i=0;i<G*G;i++)
+    velData[i] = slopeData[i] * (Math.log(accData[i]+1)/Math.log(maxAcc+1));
+
+  buildPixels();
+  spawnParticles();
+}
+
+// ── Heatmap pixel buffers ─────────────────────────────────────────────────────
+let imgData;
+const offscreen = document.createElement('canvas');
+offscreen.width = G; offscreen.height = G;
+const offCtx = offscreen.getContext('2d');
+
+function velRGB(nv){
+  // blue→cyan→green→yellow→red
+  let r,g,b;
+  if(nv<0.25){      const t=nv*4;   r=0;             g=Math.round(t*178);           b=255; }
+  else if(nv<0.50){ const t=(nv-.25)*4; r=0;          g=Math.round(178+t*77);        b=Math.round(255*(1-t)); }
+  else if(nv<0.75){ const t=(nv-.50)*4; r=Math.round(t*255); g=255;                  b=0; }
+  else {            const t=(nv-.75)*4; r=255;         g=Math.round(255*(1-t));       b=0; }
+  return [r,g,b];
+}
+
+function buildPixels(){
+  if(!imgData) imgData = offCtx.createImageData(G, G);
+  const d = imgData.data;
+  let maxAcc=1, maxVel=0.001, maxSlope=0.001;
+  for(let i=0;i<G*G;i++){
+    if(accData[i]>maxAcc) maxAcc=accData[i];
+    if(velData[i]>maxVel) maxVel=velData[i];
+    if(slopeData[i]>maxSlope) maxSlope=slopeData[i];
+  }
+
+  for(let i=0;i<G*G;i++){
+    const nv = velData[i]/maxVel;
+    const na = Math.pow(Math.log(accData[i]+1)/Math.log(maxAcc+1), 0.45);
+    const ns = slopeData[i]/maxSlope;
+    const ne = elevData[i];
+    let r,g,b;
+
+    if(layer==='velocity'){
+      [r,g,b] = velRGB(nv);
+      // darken very slow flat areas slightly for contrast
+      if(nv<0.05){ r=0; g=10; b=60; }
+    } else if(layer==='depth'){
+      if(na<0.20){      r=200; g=188; b=152; }
+      else if(na<0.45){ const t=(na-.20)/.25; r=Math.round(200-t*175); g=Math.round(188-t*100); b=Math.round(152+t*88); }
+      else if(na<0.70){ const t=(na-.45)/.25; r=Math.round(25-t*15);   g=Math.round(88-t*55);   b=Math.round(240-t*40); }
+      else{             const t=(na-.70)/.30; r=10; g=Math.round(33-t*20); b=Math.round(200+t*55); }
+    } else if(layer==='slope'){
+      const sh = 25 + ns*230;
+      r=Math.round(sh); g=Math.round(sh*0.94); b=Math.round(sh*0.85);
+    } else { // composite
+      // elevation tinted terrain
+      let er,eg,eb;
+      if(ne<0.35){      er=20+ne*150; eg=80+ne*160; eb=15+ne*50; }
+      else if(ne<0.65){ er=72+ne*120; eg=136-ne*80; eb=30-ne*20; }
+      else{             er=150-ne*80; eg=84-ne*60;  eb=17+ne*30; }
+      // overlay velocity as red-shift on fast cells
+      const vf = Math.min(1, nv*2);
+      r=Math.round(er*(1-vf*0.6)+220*vf);
+      g=Math.round(eg*(1-vf*0.5)+60*vf);
+      b=Math.round(eb*(1-vf*0.4)+10*vf);
+      // blue tint on deep accumulation channels
+      if(na>0.6){ const t=(na-.6)/.4; r=Math.round(r*(1-t*.7)); g=Math.round(g*(1-t*.4)); b=Math.round(b*(1-t*.2)+90*t); }
+    }
+    d[i*4]  = Math.max(0,Math.min(255,r));
+    d[i*4+1]= Math.max(0,Math.min(255,g));
+    d[i*4+2]= Math.max(0,Math.min(255,b));
+    d[i*4+3]= 255;
+  }
+}
+
+// ── Particle system ───────────────────────────────────────────────────────────
+const particles = [];
+let globalMaxVel = 0.001;
+
+class Particle {
+  constructor(){ this.respawn(); }
+  respawn(){
+    // Spawn on high terrain (headwaters)
+    let tries=0;
+    do{
+      this.r = 1 + Math.random()*(G-3);
+      this.c = 1 + Math.random()*(G-3);
+      tries++;
+    } while(elevData[Math.floor(this.r)*G+Math.floor(this.c)] < 0.40 && tries<40);
+    this.life    = 0;
+    this.maxLife = 60 + Math.random()*140;
+    this.speed   = 0.5 + Math.random()*1.0;
+    this.trail   = [];
+  }
+  update(){
+    const r=Math.floor(this.r), c=Math.floor(this.c);
+    if(r<1||r>=G-1||c<1||c>=G-1){ this.respawn(); return; }
+    const d = flowDir[r*G+c];
+    if(d<0){ this.respawn(); return; }
+    const vel = velData[r*G+c];
+    const spd = this.speed * (0.2 + vel/globalMaxVel * 2.8) * rainIntensity;
+    this.trail.push({r:this.r, c:this.c});
+    if(this.trail.length>14) this.trail.shift();
+    this.r += D8[d][0]*spd;
+    this.c += D8[d][1]*spd;
+    this.life++;
+    if(this.life>this.maxLife) this.respawn();
+  }
+}
+
+function spawnParticles(){
+  globalMaxVel = 0.001;
+  for(let i=0;i<G*G;i++) if(velData[i]>globalMaxVel) globalMaxVel=velData[i];
+  particles.length = 0;
+  for(let i=0;i<streamCount;i++) particles.push(new Particle());
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function resize(){
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  cellW = W/G; cellH = H/G;
+}
+
+function draw(){
+  // Heatmap background
+  offCtx.putImageData(imgData, 0, 0);
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(offscreen, 0, 0, W, H);
+  ctx.restore();
+
+  if(!animating) return;
+
+  // Update + draw stream particles
+  for(const p of particles){
+    p.update();
+    const tr = p.trail;
+    if(tr.length < 2) continue;
+    const ri = Math.floor(p.r), ci = Math.floor(p.c);
+    if(ri<0||ri>=G||ci<0||ci>=G) continue;
+    const nv  = velData[ri*G+ci] / globalMaxVel;
+    const age = p.life / p.maxLife;
+    const alpha = Math.min(1, (1-age)*2.5) * 0.80;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const [pr,pg,pb] = velRGB(nv);
+    ctx.strokeStyle = `rgb(${pr},${pg},${pb})`;
+    ctx.lineWidth   = 1.0 + nv*2.2;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
+    ctx.shadowColor = `rgb(${pr},${pg},${pb})`;
+    ctx.shadowBlur  = 3 + nv*4;
+    ctx.beginPath();
+    for(let j=0;j<tr.length;j++){
+      const x=tr[j].c*cellW, y=tr[j].r*cellH;
+      j===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+const LEGENDS = {
+  velocity:  { label:'FLOW VELOCITY — SLOW → FAST',    ticks:['0 m/s','0.5','1.0','1.5','2.0+'],
+               grad:[[0,'#000090'],[0.25,'#00b2ff'],[0.5,'#00ff80'],[0.75,'#ffff00'],[1,'#ff2200']] },
+  depth:     { label:'WATER DEPTH — DRY → DEEP',       ticks:['Dry','Shallow','Medium','Deep','Channel'],
+               grad:[[0,'#c8bc98'],[0.3,'#4a8fd0'],[0.7,'#1230be'],[1,'#020a80']] },
+  slope:     { label:'SLOPE — FLAT → STEEP',           ticks:['0°','5°','10°','20°','30°+'],
+               grad:[[0,'#e8e4d8'],[1,'#1a1510']] },
+  composite: { label:'COMPOSITE — ELEVATION + VELOCITY + DEPTH', ticks:['Low','','Mid','','High'],
+               grad:[[0,'#204820'],[0.4,'#8a6820'],[0.7,'#cc3000'],[1,'#0020cc']] },
+};
+
+function drawLegend(){
+  const lc = document.getElementById('legend-canvas').getContext('2d');
+  const info = LEGENDS[layer];
+  document.getElementById('legend-label').textContent = info.label;
+  const g = lc.createLinearGradient(0,0,280,0);
+  for(const [t,c] of info.grad) g.addColorStop(t,c);
+  lc.fillStyle=g; lc.fillRect(0,0,280,10);
+  const tc = document.getElementById('legend-ticks').children;
+  for(let i=0;i<5;i++) tc[i].textContent = info.ticks[i]||'';
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+function setLayer(l){
+  layer = l;
+  ['velocity','depth','slope','composite'].forEach(id=>{
+    document.getElementById('btn-'+id).classList.toggle('active', id===l);
+  });
+  buildPixels();
+  drawLegend();
+}
+function toggleAnim(){
+  animating = !animating;
+  const b = document.getElementById('btn-anim');
+  b.textContent = animating ? '▶ Animate' : '⏸ Paused';
+  b.classList.toggle('active', animating);
+}
+function regenerate(){
+  terrainSeed = (Math.random()*99999)|0;
+  generateTerrain();
+}
+
+document.getElementById('rain').addEventListener('input', e=>{
+  rainIntensity = parseInt(e.target.value)/100;
+  document.getElementById('rainv').textContent = e.target.value;
+});
+document.getElementById('streams').addEventListener('input', e=>{
+  streamCount = parseInt(e.target.value);
+  document.getElementById('streamsv').textContent = e.target.value;
+  spawnParticles();
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+function loop(){ requestAnimationFrame(loop); draw(); }
+resize();
+window.addEventListener('resize', ()=>{ resize(); buildPixels(); });
+generateTerrain();
+drawLegend();
+loop();
+</script>
+</body>
+</html>

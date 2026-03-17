@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Water-Save | 3D Data Layers</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #08101a; font-family: 'Courier New', monospace; color: #39d0f0; overflow: hidden; }
+  #container { width: 100vw; height: 100vh; position: relative; }
+  #canvas-container { width: 100%; height: 100%; }
+  #ui { position: absolute; top: 20px; left: 20px; z-index: 100; }
+  #title { font-size: 18px; font-weight: bold; color: #39d0f0; text-shadow: 0 0 10px #39d0f0; margin-bottom: 4px; letter-spacing: 2px; }
+  #subtitle { font-size: 11px; color: #4a7a8a; margin-bottom: 20px; letter-spacing: 1px; }
+  .control-group { background: rgba(8,16,26,0.85); border: 1px solid #1a3a4a; border-radius: 4px; padding: 12px 16px; margin-bottom: 12px; min-width: 200px; }
+  .control-label { font-size: 10px; color: #39d0f0; letter-spacing: 2px; margin-bottom: 8px; text-transform: uppercase; }
+  #explode-slider { width: 100%; -webkit-appearance: none; height: 3px; background: #1a3a4a; border-radius: 2px; outline: none; }
+  #explode-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; background: #39d0f0; border-radius: 50%; cursor: pointer; box-shadow: 0 0 8px #39d0f0; }
+  .explode-labels { display: flex; justify-content: space-between; font-size: 9px; color: #4a7a8a; margin-top: 4px; }
+  #legend { position: absolute; bottom: 20px; left: 20px; z-index: 100; }
+  .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; cursor: pointer; padding: 4px 8px; border-radius: 3px; transition: background 0.2s; background: rgba(8,16,26,0.7); border: 1px solid #1a3a4a; }
+  .legend-item:hover { background: rgba(57,208,240,0.08); border-color: #39d0f0; }
+  .legend-item.hidden-layer { opacity: 0.4; }
+  .legend-color { width: 28px; height: 10px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.2); }
+  .legend-text { font-size: 11px; color: #c0d8e0; letter-spacing: 1px; }
+  .legend-height { font-size: 9px; color: #4a7a8a; margin-left: auto; padding-left: 8px; }
+  #probe-info { position: absolute; bottom: 20px; right: 20px; z-index: 100; background: rgba(8,16,26,0.9); border: 1px solid #39d0f0; border-radius: 4px; padding: 12px 16px; min-width: 180px; display: none; }
+  #probe-title { font-size: 10px; color: #39d0f0; letter-spacing: 2px; margin-bottom: 8px; }
+  .probe-row { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; }
+  .probe-key { color: #4a7a8a; }
+  .probe-val { color: #c0d8e0; }
+  #instructions { position: absolute; top: 20px; right: 20px; z-index: 100; background: rgba(8,16,26,0.7); border: 1px solid #1a3a4a; border-radius: 4px; padding: 10px 14px; font-size: 10px; color: #4a7a8a; line-height: 1.7; }
+  .label3d { background: rgba(8,16,26,0.8); border: 1px solid #39d0f0; border-radius: 3px; padding: 3px 8px; font-family: 'Courier New', monospace; font-size: 11px; color: #39d0f0; letter-spacing: 1px; cursor: pointer; white-space: nowrap; text-shadow: 0 0 6px #39d0f0; transition: all 0.2s; }
+  .label3d:hover { background: rgba(57,208,240,0.15); }
+  .label3d.hidden { opacity: 0.4; border-color: #4a7a8a; color: #4a7a8a; text-shadow: none; }
+</style>
+</head>
+<body>
+<div id="container">
+  <div id="canvas-container"></div>
+
+  <div id="ui">
+    <div id="title">DATA LAYERS</div>
+    <div id="subtitle">3D GIS EXPLODED VIEW</div>
+    <div class="control-group">
+      <div class="control-label">Explode Separation</div>
+      <input type="range" id="explode-slider" min="0" max="1.8" step="0.01" value="1">
+      <div class="explode-labels"><span>COLLAPSED</span><span>EXPANDED</span></div>
+    </div>
+  </div>
+
+  <div id="legend">
+    <div class="legend-item" data-layer="4" id="leg-4">
+      <div class="legend-color" style="background: linear-gradient(90deg, #1a3a6a, #3a8ac0, #a0d8f0);"></div>
+      <span class="legend-text">RAINFALL</span>
+      <span class="legend-height">+32m</span>
+    </div>
+    <div class="legend-item" data-layer="3" id="leg-3">
+      <div class="legend-color" style="background: linear-gradient(90deg, #8a7a2a, #2a8a2a, #aaaaaa, #2a4a8a);"></div>
+      <span class="legend-text">LAND USE</span>
+      <span class="legend-height">+24m</span>
+    </div>
+    <div class="legend-item" data-layer="2" id="leg-2">
+      <div class="legend-color" style="background: linear-gradient(90deg, #08101a, #0a3a6a, #39d0f0);"></div>
+      <span class="legend-text">FLOW ACCUM</span>
+      <span class="legend-height">+16m</span>
+    </div>
+    <div class="legend-item" data-layer="1" id="leg-1">
+      <div class="legend-color" style="background: linear-gradient(90deg, #c8a870, #a86050, #7a5040);"></div>
+      <span class="legend-text">SOIL TYPE</span>
+      <span class="legend-height">+8m</span>
+    </div>
+    <div class="legend-item" data-layer="0" id="leg-0">
+      <div class="legend-color" style="background: linear-gradient(90deg, #2a6a2a, #8aaa2a, #c8a030, #a06020);"></div>
+      <span class="legend-text">TERRAIN</span>
+      <span class="legend-height">base</span>
+    </div>
+  </div>
+
+  <div id="probe-info">
+    <div id="probe-title">PROBE VALUES</div>
+    <div class="probe-row"><span class="probe-key">ELEVATION</span><span class="probe-val" id="pv-elev">—</span></div>
+    <div class="probe-row"><span class="probe-key">SOIL</span><span class="probe-val" id="pv-soil">—</span></div>
+    <div class="probe-row"><span class="probe-key">FLOW</span><span class="probe-val" id="pv-flow">—</span></div>
+    <div class="probe-row"><span class="probe-key">LAND USE</span><span class="probe-val" id="pv-land">—</span></div>
+    <div class="probe-row"><span class="probe-key">RAINFALL</span><span class="probe-val" id="pv-rain">—</span></div>
+  </div>
+
+  <div id="instructions">
+    DRAG — Rotate view<br>
+    SCROLL — Zoom<br>
+    HOVER — Probe values<br>
+    CLICK LEGEND — Toggle layer
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+// ── Scene setup ──────────────────────────────────────────────────────────────
+const container = document.getElementById('canvas-container');
+const W = window.innerWidth, H = window.innerHeight;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(W, H);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+container.appendChild(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(W, H);
+labelRenderer.domElement.style.position = 'absolute';
+labelRenderer.domElement.style.top = '0';
+labelRenderer.domElement.style.pointerEvents = 'none';
+container.appendChild(labelRenderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x08101a);
+scene.fog = new THREE.FogExp2(0x08101a, 0.008);
+
+const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 2000);
+camera.position.set(120, 80, 120);
+camera.lookAt(0, 15, 0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 15, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 40;
+controls.maxDistance = 400;
+
+// Lights
+const ambientLight = new THREE.AmbientLight(0xffffff, 2.8);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+dirLight.position.set(80, 120, 60);
+dirLight.castShadow = true;
+scene.add(dirLight);
+const rimLight = new THREE.DirectionalLight(0x39d0f0, 0.6);
+rimLight.position.set(-80, 40, -60);
+scene.add(rimLight);
+
+// ── Value noise ───────────────────────────────────────────────────────────────
+function hash(x, y) {
+  let n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+function lerp(a, b, t) { return a + t * (b - a); }
+function smoothstep(t) { return t * t * (3 - 2 * t); }
+function noise2(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const sx = smoothstep(fx), sy = smoothstep(fy);
+  const a = hash(ix, iy), b = hash(ix + 1, iy);
+  const c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+  return lerp(lerp(a, b, sx), lerp(c, d, sx), sy);
+}
+function fbm(x, y, octaves) {
+  let v = 0, amp = 0.5, freq = 1, max = 0;
+  for (let i = 0; i < octaves; i++) {
+    v += noise2(x * freq, y * freq) * amp;
+    max += amp; amp *= 0.5; freq *= 2.1;
+  }
+  return v / max;
+}
+
+// ── Grid configuration ────────────────────────────────────────────────────────
+const GRID = 80; // vertices per side
+const SIZE = 100; // world units
+
+// Pre-generate all data arrays
+const elevData = new Float32Array(GRID * GRID);
+const soilData = new Float32Array(GRID * GRID);
+const flowData = new Float32Array(GRID * GRID);
+const landData = new Float32Array(GRID * GRID); // 0=crop,1=forest,2=bare,3=water
+const rainData = new Float32Array(GRID * GRID);
+
+for (let j = 0; j < GRID; j++) {
+  for (let i = 0; i < GRID; i++) {
+    const idx = j * GRID + i;
+    const nx = i / (GRID - 1) * 4.0;
+    const ny = j / (GRID - 1) * 4.0;
+
+    // Elevation: primary landscape
+    const e = fbm(nx, ny, 6);
+    elevData[idx] = e;
+
+    // Soil: correlated with elevation but with own variation
+    const s = fbm(nx + 10, ny + 10, 3) * 0.6 + (1 - e) * 0.4;
+    soilData[idx] = s;
+
+    // Flow: inversely correlated with elevation (valleys have more flow)
+    const rawFlow = fbm(nx * 1.5 + 20, ny * 1.5 + 20, 4);
+    const f = (1 - e) * 0.7 + rawFlow * 0.3;
+    flowData[idx] = Math.pow(f, 1.5);
+
+    // Land use: based on elevation and flow
+    const lu = fbm(nx + 30, ny + 30, 3);
+    landData[idx] = lu;
+
+    // Rainfall: high elevation gets less rain (shadow), valleys more
+    const r = fbm(nx * 0.8 + 40, ny * 0.8 + 40, 4);
+    rainData[idx] = r * 0.6 + (1 - e) * 0.4;
+  }
+}
+
+// ── Layer base heights ────────────────────────────────────────────────────────
+const BASE_HEIGHTS = [0, 8, 16, 24, 32];
+const layerMeshes = [];
+const layerVisible = [true, true, true, true, true];
+let explodeFactor = 1.0;
+
+function getLandUseColor(v) {
+  if (v < 0.25) return [0.88, 0.78, 0.15]; // cropland yellow
+  if (v < 0.5)  return [0.18, 0.58, 0.22]; // forest green
+  if (v < 0.75) return [0.62, 0.52, 0.38]; // bare/dry
+  return [0.15, 0.38, 0.72]; // water blue
+}
+
+function buildLayerGeometry(dataFn, colorFn, displaced) {
+  const geo = new THREE.PlaneGeometry(SIZE, SIZE, GRID - 1, GRID - 1);
+  geo.rotateX(-Math.PI / 2);
+
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+
+  for (let i = 0; i < pos.count; i++) {
+    const xi = i % GRID;
+    const yi = Math.floor(i / GRID);
+    const idx = yi * GRID + xi;
+    const val = dataFn(idx);
+    const [r, g, b] = colorFn(val, idx);
+    colors[i * 3] = r;
+    colors[i * 3 + 1] = g;
+    colors[i * 3 + 2] = b;
+
+    if (displaced) {
+      pos.setY(i, val * 14);
+    }
+  }
+
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// ── Build layers ─────────────────────────────────────────────────────────────
+const layerDefs = [
+  {
+    name: 'TERRAIN',
+    displaced: true,
+    opacity: 1.0,
+    dataFn: idx => elevData[idx],
+    colorFn: v => {
+      // hypsometric: green→yellow→orange→brown
+      if (v < 0.35) return [0.18, 0.5 + v * 0.5, 0.12];
+      if (v < 0.55) return [0.55 + v * 0.3, 0.62 - v * 0.2, 0.1];
+      if (v < 0.75) return [0.7, 0.38 - v * 0.2, 0.08];
+      return [0.55 - v * 0.2, 0.3 - v * 0.2, 0.15 + v * 0.1];
+    },
+    wireColor: 0x204030,
+  },
+  {
+    name: 'SOIL TYPE',
+    displaced: false,
+    opacity: 0.85,
+    dataFn: idx => soilData[idx],
+    colorFn: v => {
+      if (v < 0.35) return [0.85, 0.72, 0.42]; // sandy warm tan/gold
+      if (v < 0.65) return [0.72, 0.28, 0.18]; // clay brick red
+      return [0.52, 0.32, 0.18]; // loam warm brown
+    },
+    wireColor: 0x3a2a1a,
+  },
+  {
+    name: 'FLOW ACCUM',
+    displaced: false,
+    opacity: 0.88,
+    dataFn: idx => flowData[idx],
+    colorFn: v => {
+      if (v < 0.2) return [0.78, 0.72, 0.58]; // low - pale sandy
+      if (v < 0.5) return [0.30, 0.55, 0.80]; // medium - light blue
+      return [0.05, 0.20, 0.75]; // high - deep blue
+    },
+    wireColor: 0x0a2040,
+  },
+  {
+    name: 'LAND USE',
+    displaced: false,
+    opacity: 0.82,
+    dataFn: idx => landData[idx],
+    colorFn: v => getLandUseColor(v),
+    wireColor: 0x303020,
+  },
+  {
+    name: 'RAINFALL',
+    displaced: false,
+    opacity: 0.75,
+    dataFn: idx => rainData[idx],
+    colorFn: v => {
+      if (v < 0.3) return [0.85, 0.85, 0.80]; // dry - pale cream
+      if (v < 0.6) return [0.40, 0.65, 0.88]; // medium - light blue
+      return [0.05, 0.25, 0.72]; // wet - deep blue
+    },
+    wireColor: 0x0a1a3a,
+  },
+];
+
+layerDefs.forEach((def, li) => {
+  const geo = buildLayerGeometry(def.dataFn, def.colorFn, def.displaced);
+
+  const mat = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: def.opacity,
+    side: THREE.DoubleSide,
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.y = BASE_HEIGHTS[li];
+  mesh.receiveShadow = true;
+  if (li === 0) mesh.castShadow = true;
+  scene.add(mesh);
+
+  // Wireframe overlay
+  const wireGeo = new THREE.WireframeGeometry(geo);
+  const wireMat = new THREE.LineBasicMaterial({
+    color: def.wireColor,
+    transparent: true,
+    opacity: 0.45,
+  });
+  const wire = new THREE.LineSegments(wireGeo, wireMat);
+  wire.position.y = BASE_HEIGHTS[li];
+  scene.add(wire);
+
+  // CSS2D label
+  const labelDiv = document.createElement('div');
+  labelDiv.className = 'label3d';
+  labelDiv.textContent = def.name;
+  labelDiv.dataset.layer = li;
+  labelDiv.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleLayer(li);
+  });
+  const label = new CSS2DObject(labelDiv);
+  label.position.set(SIZE * 0.52, 0, 0);
+  mesh.add(label);
+
+  layerMeshes.push({ mesh, wire, label, labelDiv, def });
+});
+
+// ── Legend click handlers ─────────────────────────────────────────────────────
+document.querySelectorAll('.legend-item').forEach(el => {
+  el.addEventListener('click', () => {
+    const li = parseInt(el.dataset.layer);
+    toggleLayer(li);
+  });
+});
+
+function toggleLayer(li) {
+  layerVisible[li] = !layerVisible[li];
+  const { mesh, wire, labelDiv } = layerMeshes[li];
+  mesh.visible = layerVisible[li];
+  wire.visible = layerVisible[li];
+  labelDiv.classList.toggle('hidden', !layerVisible[li]);
+  const legEl = document.getElementById('leg-' + li);
+  if (legEl) legEl.classList.toggle('hidden-layer', !layerVisible[li]);
+}
+
+// ── Explode slider ────────────────────────────────────────────────────────────
+const slider = document.getElementById('explode-slider');
+slider.addEventListener('input', () => {
+  explodeFactor = parseFloat(slider.value);
+  updateLayerPositions();
+});
+
+function updateLayerPositions() {
+  layerMeshes.forEach(({ mesh, wire }, li) => {
+    const targetY = BASE_HEIGHTS[li] * explodeFactor;
+    mesh.position.y = targetY;
+    wire.position.y = targetY;
+  });
+}
+
+// ── Probe line ────────────────────────────────────────────────────────────────
+const probeMat = new THREE.LineBasicMaterial({ color: 0x39d0f0, transparent: true, opacity: 0.8 });
+const probeGeo = new THREE.BufferGeometry().setFromPoints([
+  new THREE.Vector3(0, -5, 0),
+  new THREE.Vector3(0, 120, 0),
+]);
+const probeLine = new THREE.Line(probeGeo, probeMat);
+probeLine.visible = false;
+scene.add(probeLine);
+
+// Probe spheres at each layer
+const probeSpheres = [];
+for (let i = 0; i < 5; i++) {
+  const sg = new THREE.SphereGeometry(0.6, 8, 8);
+  const sm = new THREE.MeshBasicMaterial({ color: 0x39d0f0 });
+  const sp = new THREE.Mesh(sg, sm);
+  sp.visible = false;
+  scene.add(sp);
+  probeSpheres.push(sp);
+}
+
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const probeInfo = document.getElementById('probe-info');
+
+const SOIL_NAMES = ['Sandy', 'Clay', 'Loam'];
+const LAND_NAMES = ['Water', 'Forest', 'Cropland', 'Bare'];
+
+renderer.domElement.addEventListener('mousemove', (e) => {
+  mouse.x = (e.clientX / W) * 2 - 1;
+  mouse.y = -(e.clientY / H) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const terrain = layerMeshes[0].mesh;
+  const hits = raycaster.intersectObject(terrain);
+
+  if (hits.length > 0 && layerVisible[0]) {
+    const pt = hits[0].point;
+    // Map to grid
+    const gx = Math.floor((pt.x / SIZE + 0.5) * (GRID - 1));
+    const gy = Math.floor((pt.z / SIZE + 0.5) * (GRID - 1));
+    const gxc = Math.max(0, Math.min(GRID - 1, gx));
+    const gyc = Math.max(0, Math.min(GRID - 1, gy));
+    const idx = gyc * GRID + gxc;
+
+    probeLine.visible = true;
+    const probeX = pt.x, probeZ = pt.z;
+    probeGeo.setFromPoints([
+      new THREE.Vector3(probeX, -2, probeZ),
+      new THREE.Vector3(probeX, BASE_HEIGHTS[4] * explodeFactor + 5, probeZ),
+    ]);
+
+    probeSpheres.forEach((sp, li) => {
+      sp.visible = layerVisible[li];
+      sp.position.set(probeX, BASE_HEIGHTS[li] * explodeFactor, probeZ);
+    });
+
+    // Fill probe panel
+    const elev = elevData[idx];
+    const soil = soilData[idx];
+    const flow = flowData[idx];
+    const land = landData[idx];
+    const rain = rainData[idx];
+
+    document.getElementById('pv-elev').textContent = (elev * 1400).toFixed(0) + 'm';
+    const soilIdx = soil < 0.35 ? 0 : soil < 0.65 ? 1 : 2;
+    document.getElementById('pv-soil').textContent = SOIL_NAMES[soilIdx];
+    document.getElementById('pv-flow').textContent = (flow * 100).toFixed(1) + ' mm/hr';
+    const landIdx = land < 0.25 ? 3 : land < 0.5 ? 1 : land < 0.75 ? 0 : 2;
+    document.getElementById('pv-land').textContent = LAND_NAMES[landIdx];
+    document.getElementById('pv-rain').textContent = (rain * 200 + 20).toFixed(1) + ' mm';
+
+    probeInfo.style.display = 'block';
+  } else {
+    probeLine.visible = false;
+    probeSpheres.forEach(sp => sp.visible = false);
+    probeInfo.style.display = 'none';
+  }
+});
+
+renderer.domElement.addEventListener('mouseleave', () => {
+  probeLine.visible = false;
+  probeSpheres.forEach(sp => sp.visible = false);
+  probeInfo.style.display = 'none';
+});
+
+// ── Ambient particles (floating dust) ────────────────────────────────────────
+const particleCount = 300;
+const pGeo = new THREE.BufferGeometry();
+const pPos = new Float32Array(particleCount * 3);
+for (let i = 0; i < particleCount; i++) {
+  pPos[i * 3] = (Math.random() - 0.5) * SIZE * 1.5;
+  pPos[i * 3 + 1] = Math.random() * 60;
+  pPos[i * 3 + 2] = (Math.random() - 0.5) * SIZE * 1.5;
+}
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+const pMat = new THREE.PointsMaterial({ color: 0x39d0f0, size: 0.3, transparent: true, opacity: 0.3 });
+const particles = new THREE.Points(pGeo, pMat);
+scene.add(particles);
+
+// ── Edge glow lines for each layer ───────────────────────────────────────────
+function buildEdgeLines(li) {
+  const half = SIZE / 2;
+  const pts = [
+    new THREE.Vector3(-half, 0, -half),
+    new THREE.Vector3(half, 0, -half),
+    new THREE.Vector3(half, 0, half),
+    new THREE.Vector3(-half, 0, half),
+    new THREE.Vector3(-half, 0, -half),
+  ];
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({ color: 0x39d0f0, transparent: true, opacity: 0.5 });
+  const line = new THREE.Line(geo, mat);
+  line.position.y = BASE_HEIGHTS[li];
+  scene.add(line);
+  return line;
+}
+const edgeLines = BASE_HEIGHTS.map((_, li) => buildEdgeLines(li));
+
+// ── Animate ──────────────────────────────────────────────────────────────────
+let t = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  t += 0.005;
+
+  controls.update();
+
+  // Gentle particle drift
+  const ppos = pGeo.attributes.position.array;
+  for (let i = 0; i < particleCount; i++) {
+    ppos[i * 3 + 1] += 0.03;
+    if (ppos[i * 3 + 1] > 65) ppos[i * 3 + 1] = 0;
+  }
+  pGeo.attributes.position.needsUpdate = true;
+
+  // Update edge lines Y
+  edgeLines.forEach((el, li) => {
+    el.position.y = BASE_HEIGHTS[li] * explodeFactor;
+  });
+
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+}
+animate();
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  const nW = window.innerWidth, nH = window.innerHeight;
+  camera.aspect = nW / nH;
+  camera.updateProjectionMatrix();
+  renderer.setSize(nW, nH);
+  labelRenderer.setSize(nW, nH);
+});
+</script>
+</body>
+</html>
